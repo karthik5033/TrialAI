@@ -71,3 +71,6 @@ venv/
 ENV/
 
 *.db
+/uploads/
+/fastapi/workspaces/
+build_output.txt
