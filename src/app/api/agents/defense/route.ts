@@ -1,3 +1,5 @@
+import { fetchWithRetry } from '../fetchWithRetry';
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -21,7 +23,7 @@ export async function POST(req: Request) {
     const systemPrompt = "You are the Defense in an AI bias trial. You are measured, analytical, and calm. Your job is to argue the accuracy-fairness tradeoff and present business justification for the model. You speak in formal courtroom language. Keep responses to 3-4 sentences maximum.";
     const userMessage = `Respond to the prosecution claims about ${dataset} dataset and ${metric} violations. Defend the model using accuracy and business necessity arguments.`;
 
-    const openRouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const openRouterResponse = await fetchWithRetry("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,

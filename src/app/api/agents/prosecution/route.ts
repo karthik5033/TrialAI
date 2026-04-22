@@ -1,3 +1,5 @@
+import { fetchWithRetry } from '../fetchWithRetry';
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -24,7 +26,7 @@ export async function POST(req: Request) {
     const attrs = Array.isArray(sensitiveAttributes) ? sensitiveAttributes.join(', ') : sensitiveAttributes;
     const userMessage = `The defendant model is trained on the ${dataset} dataset. Sensitive attributes detected: ${attrs}. Present your opening argument regarding ${metric} violations.`;
 
-    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const groqResponse = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,

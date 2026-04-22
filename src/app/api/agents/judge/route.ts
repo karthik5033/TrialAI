@@ -1,3 +1,5 @@
+import { fetchWithRetry } from '../fetchWithRetry';
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -21,7 +23,7 @@ export async function POST(req: Request) {
     const systemPrompt = "You are the Judge in an AI bias trial. You are authoritative, neutral, and structured. You apply legal fairness standards including disparate impact doctrine. You cross-examine both sides and deliver structured rulings. Keep responses to 3-4 sentences maximum.";
     const userMessage = `Having heard the Prosecution argue: ${prosecutionArgument}. And the Defense counter: ${defenseArgument}. Deliver your ruling on the ${metric} charge regarding the ${dataset} dataset.`;
 
-    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const groqResponse = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
