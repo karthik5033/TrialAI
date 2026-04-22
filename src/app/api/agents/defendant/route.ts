@@ -1,3 +1,5 @@
+import { fetchWithRetry } from '../fetchWithRetry';
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -24,7 +26,7 @@ export async function POST(req: Request) {
     const metricsStr = fairnessMetrics ? JSON.stringify(fairnessMetrics) : "None provided";
     const userMessage = `You are being tried for ${metric} violations on the ${dataset} dataset. Your top features are: ${shapList}. Your fairness scores are: ${metricsStr}. The Judge asks: ${judgeQuestion || "none"}. This is phase: ${phase}. Respond as the model defending itself.`;
 
-    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const groqResponse = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
