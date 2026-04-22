@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,6 +200,105 @@ async def run_analysis(
         "proxy_features": result["proxy_features"],
         "demographic_breakdown": result["demographic_breakdown"],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/full-analysis (Old UI Compatibility)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/full-analysis", tags=["upload", "analysis"])
+async def full_analysis(
+    file: UploadFile = File(...),
+    model_file: UploadFile = File(...),
+    target_column: str = Form(...),
+    sensitive_attributes: str = Form(...),
+    training_script: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Monolithic endpoint for the old UI: uploads files and runs analysis in one go.
+    """
+    import io
+    
+    # 1. Create Session
+    session_id = uuid.uuid4()
+    session = AnalysisSession(
+        id=session_id,
+        dataset_filename=file.filename,
+        model_filename=model_file.filename,
+        script_filename=training_script.filename if training_script else None,
+        status=SessionStatus.running,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+
+    # 2. Save Files
+    session_dir = UPLOAD_DIR / str(session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    
+    csv_bytes = await file.read()
+    (session_dir / "dataset.csv").write_bytes(csv_bytes)
+    
+    model_bytes = await model_file.read()
+    (session_dir / "model.pkl").write_bytes(model_bytes)
+    
+    if training_script:
+        script_bytes = await training_script.read()
+        (session_dir / "script.py").write_bytes(script_bytes)
+
+    # 3. Run Analysis
+    try:
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        model = load_model(str(session_dir / "model.pkl"))
+        
+        sensitive_list = [s.strip() for s in sensitive_attributes.split(",")]
+        
+        result = run_full_analysis(
+            model=model,
+            df=df,
+            target_column=target_column,
+            sensitive_attrs=sensitive_list,
+        )
+        
+        # Persist results
+        for metric in result["bias_metrics"]:
+            severity_value = metric["severity"]
+            if severity_value == "pass":
+                sev_enum = BiasSeverity.pass_
+            elif severity_value == "warning":
+                sev_enum = BiasSeverity.warning
+            else:
+                sev_enum = BiasSeverity.critical
+
+            bias_row = BiasResult(
+                session_id=session_id,
+                protected_attribute=metric["protected_attribute"],
+                metric_name=metric["metric_name"],
+                metric_value=metric["metric_value"],
+                threshold=metric["threshold"],
+                passed=metric["passed"],
+                severity=sev_enum,
+                group_breakdown=metric["group_breakdown"],
+            )
+            db.add(bias_row)
+
+        session.status = SessionStatus.complete
+        session.row_count = result["row_count"]
+        session.feature_count = result["feature_count"]
+        await db.commit()
+        
+        return {
+            "session_id": str(session_id),
+            "status": "complete",
+            **result
+        }
+        
+    except Exception as exc:
+        session.status = SessionStatus.failed
+        await db.commit()
+        logger.exception("Full analysis failed")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

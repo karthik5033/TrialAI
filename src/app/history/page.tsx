@@ -77,7 +77,7 @@ export default function HistoryPage() {
             <p className="text-sm text-gray-500">View and resume past AI Courtroom bias audits.</p>
           </div>
           <button
-            onClick={() => router.push("/upload")}
+            onClick={() => router.push("/trial/upload")}
             className="px-5 py-2.5 bg-white text-gray-950 text-sm font-semibold rounded-lg hover:bg-gray-200 transition-colors shadow-sm"
           >
             Start New Audit
@@ -101,7 +101,7 @@ export default function HistoryPage() {
           <div className="space-y-4">
             {sessions.map((s) => {
               // Decide which phase they reached
-              let targetRoute = `/upload`;
+              let targetRoute = `/trial/upload`;
               let phaseName = "Upload";
               let progressColor = "text-gray-400";
               

@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     }
 
     const fastApiUrl = process.env.FASTAPI_URL || "http://localhost:8000";
-    const response = await fetch(`${fastApiUrl}/full-analysis`, {
+    const response = await fetch(`${fastApiUrl}/api/analysis/full-analysis`, {
       method: "POST",
       body: formData,
     });

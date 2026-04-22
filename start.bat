@@ -6,7 +6,9 @@ cd backend
 python -m venv venv
 call venv\Scripts\activate.bat
 pip install -r requirements.txt
+cd ..
 alembic upgrade head
+cd backend
 
 echo 2. Starting Backend Server...
 start "AI Courtroom - Backend" cmd /k "call venv\Scripts\activate.bat & uvicorn main:app --reload --port 8000"

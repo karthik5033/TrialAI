@@ -105,7 +105,7 @@ export default function LandingPage() {
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </Link>
             <Link 
-              href="/upload"
+              href="/trial/upload"
               className="flex items-center gap-2 bg-surface hover:bg-surface/80 border border-border text-foreground font-medium px-8 py-4 rounded-lg transition-all"
             >
               Upload Dataset
@@ -324,7 +324,7 @@ export default function LandingPage() {
           <div className="flex gap-6">
             <Link href="#" className="hover:text-foreground transition-colors">About</Link>
             <Link href="/demo" className="hover:text-foreground transition-colors">Demo</Link>
-            <Link href="/upload" className="hover:text-foreground transition-colors">Upload</Link>
+            <Link href="/trial/upload" className="hover:text-foreground transition-colors">Upload</Link>
           </div>
 
           <div className="flex items-center gap-4">

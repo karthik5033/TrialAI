@@ -69,3 +69,5 @@ htmlcov/
 .venv
 venv/
 ENV/
+
+*.db

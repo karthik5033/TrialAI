@@ -32,8 +32,8 @@ export default function RootLayout({
         <nav className="sticky top-0 z-50 w-full border-b border-border bg-white">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2 font-bold text-xl tracking-tight text-foreground">
-              <Scale className="w-6 h-6 text-gold" />
-              <span>AI Courtroom v2.0</span>
+              <Scale className="w-6 h-6 text-[#e67e22]" />
+              <span>TrialAI</span>
             </Link>
             <div className="flex items-center gap-6">
               <Link href="/demo" className="text-sm font-medium text-foreground/70 hover:text-foreground transition-colors">
@@ -42,7 +42,7 @@ export default function RootLayout({
               <Link href="/history" className="text-sm font-medium text-foreground/70 hover:text-foreground transition-colors">
                 Audit History
               </Link>
-              <Link href="/upload" className="text-sm font-medium bg-foreground text-background px-4 py-2 rounded-md hover:bg-foreground/90 transition-all shadow-sm">
+              <Link href="/trial/upload" className="text-sm font-medium bg-[#0f172a] text-white px-4 py-2 rounded-md hover:bg-[#0f172a]/90 transition-all shadow-sm">
                 Start Trial
               </Link>
             </div>
