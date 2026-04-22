@@ -147,7 +147,7 @@ export default function UploadPage() {
         </div>
       </div>
 
-      <main className="max-w-4xl mx-auto px-6 pt-40">
+      <main className="relative z-10 max-w-4xl mx-auto px-6 pt-40">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-12 text-center">
           <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-lg">Submit Evidence for Trial</h1>
           <p className="text-white/70 text-xl font-light max-w-2xl mx-auto">Upload your dataset, trained model, and optionally the training script for a complete adversarial bias audit.</p>
