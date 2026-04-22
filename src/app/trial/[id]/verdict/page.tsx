@@ -615,7 +615,7 @@ export default function VerdictPage({ params }: { params: { id: string } }) {
                 <Download className="w-5 h-5" />
                 Download Report (PDF)
               </button>
-              <a href="/trial/upload" className="w-full sm:w-auto px-8 py-4 bg-surface border border-border text-foreground font-semibold rounded-lg flex items-center justify-center gap-2 hover:bg-surface/80 transition-all">
+              <a href="/upload" className="w-full sm:w-auto px-8 py-4 bg-surface border border-border text-foreground font-semibold rounded-lg flex items-center justify-center gap-2 hover:bg-surface/80 transition-all">
                 <RotateCcw className="w-5 h-5" />
                 Start New Trial
               </a>

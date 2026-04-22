@@ -46,7 +46,7 @@ export default function NewTrialVerdictPage() {
     const rawSessionId = localStorage.getItem("trialSessionId");
 
     if (!rawAnalysis) {
-      router.push("/trial/upload");
+      router.push("/upload");
       return;
     }
 
@@ -82,7 +82,7 @@ export default function NewTrialVerdictPage() {
       }
     } catch (e) {
       console.error("Failed to parse analysis", e);
-      router.push("/trial/upload");
+      router.push("/upload");
       return;
     }
 
@@ -467,7 +467,7 @@ export default function NewTrialVerdictPage() {
             >
               <Fingerprint className="w-4 h-4" /> View Bias Fingerprint
             </button>
-            <Link href="/trial/upload"
+            <Link href="/upload"
               className="flex items-center gap-2 px-6 py-3 border border-border rounded-lg font-medium text-sm hover:bg-surface transition-colors">
               <RotateCcw className="w-4 h-4" /> New Trial
             </Link>

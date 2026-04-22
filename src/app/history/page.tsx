@@ -187,34 +187,42 @@ export default function HistoryPage() {
                     )}
                   </div>
 
-                  {/* Right: Progress/Action */}
-                  <div className="flex items-center gap-4 text-sm justify-between md:justify-end md:w-auto">
-                    <span className={`font-semibold ${progressColor} hidden md:inline-block`}>{phaseName}</span>
-                    
-                    {/* Action Dropdown / Buttons */}
-                    <div className="flex gap-2">
+                  {/* Right: Quick Actions */}
+                  <div className="flex flex-col md:flex-row items-center gap-3 md:w-auto">
+                    <div className="flex items-center gap-2">
+                      {s.verdict && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); router.push(`/courtroom/${s.session_id}`); }}
+                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-[10px] font-bold rounded-lg border border-amber-500/20 transition-all uppercase tracking-wider"
+                        >
+                          Verdict
+                        </button>
+                      )}
+                      {s.remediation && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); router.push(`/remediation/${s.session_id}`); }}
+                          className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-lg border border-emerald-500/20 transition-all uppercase tracking-wider"
+                        >
+                          Mitigation
+                        </button>
+                      )}
                       <button 
                         onClick={(e) => { e.stopPropagation(); router.push(`/explain/${s.session_id}`); }}
-                        className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg border border-gray-700 transition-colors"
-                        title="Decision Explainability"
+                        className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-[10px] font-bold rounded-lg border border-blue-500/20 transition-all uppercase tracking-wider"
                       >
-                        <Search className="w-4 h-4" />
+                        Explain
                       </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 h-full border-l border-gray-700/50 pl-3 ml-1">
                       <button 
                         onClick={(e) => { e.stopPropagation(); window.open(`${API}/api/reports/${s.session_id}/pdf`); }}
-                        className="p-2 bg-gray-800 hover:bg-gray-700 text-red-400 rounded-lg border border-gray-700 transition-colors"
-                        title="Download PDF Report"
+                        className="p-2 text-gray-500 hover:text-red-400 transition-colors"
+                        title="PDF Report"
                       >
                         <FileText className="w-4 h-4" />
                       </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); window.open(`${API}/api/reports/${s.session_id}/docx`); }}
-                        className="p-2 bg-gray-800 hover:bg-gray-700 text-blue-400 rounded-lg border border-gray-700 transition-colors"
-                        title="Download DOCX Report"
-                      >
-                        <FileText className="w-4 h-4" />
-                      </button>
-                      <ChevronRight className="w-5 h-5 text-gray-600 group-hover:text-white transition-colors ml-2 self-center" />
+                      <ChevronRight className="w-5 h-5 text-gray-600 group-hover:text-white transition-colors" />
                     </div>
                   </div>
                 </div>

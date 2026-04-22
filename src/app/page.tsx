@@ -50,7 +50,25 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-background text-foreground overflow-hidden selection:bg-gold/30">
       {/* Navigation */}
-
+      <nav className="fixed top-0 w-full border-b border-border bg-background/80 backdrop-blur-md z-50">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2 font-mono font-bold text-lg tracking-tight">
+            <ScaleIcon className="w-5 h-5 text-gold" />
+            <span>TrialAI</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link href="/demo" className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
+              Demo
+            </Link>
+            <Link 
+              href="/upload" 
+              className="text-sm font-medium bg-foreground text-background px-4 py-2 rounded-md hover:bg-foreground/90 transition-colors"
+            >
+              Start Trial
+            </Link>
+          </div>
+        </div>
+      </nav>
 
       {/* Hero Section */}
       <section className="relative pt-32 pb-20 px-6">

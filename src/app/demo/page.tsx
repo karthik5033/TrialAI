@@ -249,7 +249,7 @@ export default function DemoPage() {
           <Link href="/trial/demo/verdict" className={`text-sm font-semibold flex items-center gap-2 px-4 py-1.5 rounded-lg transition-all duration-500 ${trialComplete ? "bg-amber-400 text-amber-900 animate-pulse ring-2 ring-amber-500 ring-offset-2 scale-105 shadow-md" : "bg-amber-200 hover:bg-amber-300 text-amber-900"}`}>
             <ExternalLink className="w-4 h-4" /> <span className="hidden md:inline">View Full Verdict</span>
           </Link>
-          <Link href="/trial/upload" className="text-sm font-semibold flex items-center gap-2 bg-foreground text-background hover:bg-foreground/90 px-4 py-1.5 rounded-lg transition-colors shadow-sm">
+          <Link href="/upload" className="text-sm font-semibold flex items-center gap-2 bg-foreground text-background hover:bg-foreground/90 px-4 py-1.5 rounded-lg transition-colors shadow-sm">
             <PlayCircle className="w-4 h-4" /> <span className="hidden md:inline">Start Your Own Trial</span>
           </Link>
         </div>
