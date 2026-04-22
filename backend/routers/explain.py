@@ -39,6 +39,8 @@ class ExplainRequest(BaseModel):
 
 class NarrativeRequest(BaseModel):
     shap_data: dict
+    counterfactual_data: dict | None = None
+    sensitive_attributes: list[str] | None = None
     mode: str = "manager"
 
 
@@ -116,8 +118,13 @@ async def narrative(
 ):
     """LLM Explainability Narrative."""
     try:
-        text = generate_llm_narrative(body.shap_data, body.mode)
-        return {"narrative": text, "mode": body.mode}
+        result = generate_llm_narrative(
+            shap_data=body.shap_data,
+            mode=body.mode,
+            counterfactual_data=body.counterfactual_data,
+            sensitive_attributes=body.sensitive_attributes
+        )
+        return {"narrative": result, "mode": body.mode}
     except Exception as e:
         logger.exception("Narrative failed")
         raise HTTPException(status_code=500, detail=str(e))

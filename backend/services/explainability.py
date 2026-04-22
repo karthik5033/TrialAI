@@ -206,40 +206,137 @@ def generate_counterfactuals(
 def generate_llm_narrative(
     shap_data: dict,
     mode: str,  # "technical", "manager", "legal"
-) -> str:
+    counterfactual_data: dict | None = None,
+    sensitive_attributes: list[str] | None = None,
+) -> dict:
     """
-    Call Claude to translate SHAP values into a human-readable narrative.
+    Call Claude to translate SHAP values into a structured JSON narrative.
     """
+    import json
     client = _get_client()
 
-    contributions_text = "\n".join(
-        f"- {c['feature']}: value={c['value']}, impact={c['contribution']:.4f}"
-        for c in shap_data["contributions"][:10]  # Top 10 features
-    )
+    system_prompt = """You are the Explainability Engine inside an AI accountability platform called “AI Courtroom”.
 
-    system_prompts = {
-        "technical": "You are a Data Scientist explaining a model prediction to another engineer. Focus on raw SHAP values, log-odds, base values, and feature interactions.",
-        "manager": "You are an AI Product Manager explaining a prediction to a business stakeholder. Focus on business impact, which user attributes drove the decision, and what it means practically. Avoid heavy math.",
-        "legal": "You are an AI Compliance Officer. Explain the prediction focusing on fairness, potential disparate impact, reliance on proxy variables, and alignment with anti-discrimination principles."
+You receive REAL mathematical evidence about a SINGLE model prediction:
+- Input row: raw feature values for one individual case
+- Prediction: predicted class/score and probability
+- SHAP results: base value, per-feature contribution, sorted by absolute impact
+- Counterfactuals: DiCE-ML “minimum change” scenarios that flip or significantly change the prediction
+- Fairness context: protected attributes for this individual and any relevant group-level bias metrics
+
+Your job is to:
+1) Explain WHY this prediction happened, grounded ONLY in the evidence provided.
+2) Highlight WHICH features mattered most and HOW they pushed the decision up or down.
+3) Describe WHAT would need to change in this individual’s features to flip or materially change the outcome, using the counterfactuals.
+4) Adapt tone, level of detail, and framing to the requested audience MODE: “technical”, “manager”, or “legal”.
+
+STRICT RULES:
+- Never invent metrics, numbers, or features that are not present in the input JSON.
+- If something is missing (e.g., no counterfactuals), explicitly say so instead of guessing.
+- Be concise: aim for around 3–6 short paragraphs plus bullet points where helpful.
+- Always clearly name the top 3 contributing features and explain their effect direction (pushing towards or away from the final outcome).
+- If protected attributes are among the top contributors, clearly flag this and describe the potential fairness concern without making legal conclusions you cannot support from the data.
+- Output MUST be valid JSON in the exact schema specified by the user message."""
+
+    mode_snippets = {
+        "technical": """MODE: technical
+Audience: ML engineers and data scientists.
+Style: precise, compact, and technical, but still readable.
+Focus: SHAP math, feature contributions, decision boundary intuition, probability behavior, and any trade-offs between accuracy and fairness directly visible in this single case.""",
+
+        "manager": """MODE: manager
+Audience: product managers and business leaders.
+Style: plain English, no equations, 5th–8th grade reading level.
+Focus: top 3 drivers of the outcome, how favorable/unfavorable this decision is, and 2–3 practical actions or policy tweaks this suggests.
+Avoid ML jargon; talk in terms of customers, risk, and fairness.""",
+
+        "legal": """MODE: legal
+Audience: legal, risk, and compliance teams.
+Style: formal, cautious, and documentation-friendly.
+Focus: transparency of the decision, role of any protected attributes, alignment with principles of non-discrimination and explainability (e.g., under the EU AI Act), and what should be documented for audit.
+Do NOT make definitive legal conclusions; instead, describe factual observations about this prediction."""
     }
 
-    prompt = f"""Explain this specific model prediction.
+    payload = {
+        "prediction": {
+            "predicted_label": shap_data.get("prediction"),
+            "probability": shap_data.get("probability")
+        },
+        "shap": {
+            "base_value": shap_data.get("base_value"),
+            "top_features": shap_data.get("contributions", [])[:10]
+        },
+        "counterfactuals": counterfactual_data.get("counterfactuals", []) if counterfactual_data else [],
+        "fairness_context": {
+            "protected_attributes_flagged": sensitive_attributes or []
+        }
+    }
 
-Prediction output: {shap_data['prediction']} (Probability: {shap_data['probability']:.4f})
-Base expected value: {shap_data['base_value']:.4f}
+    user_prompt = f"""You are generating an explainability report for a SINGLE prediction.
 
-Top driving features (SHAP values):
-{contributions_text}
+{mode_snippets.get(mode, mode_snippets['manager'])}
 
-Provide a 2-3 paragraph narrative explanation in the requested persona."""
+Here is the evidence in JSON format:
+
+```json
+{json.dumps(payload, indent=2)}
+```
+
+Return a SINGLE JSON object with this schema:
+
+```json
+{{
+  "mode": "{mode}",
+  "headline": "One-sentence headline summary in plain language",
+  "verdict": "Very short phrase about how favorable or unfavorable the outcome is for this individual",
+  "why_summary": "2–4 sentence plain-language explanation of why the model made this prediction, grounded in SHAP.",
+  "top_factors": [
+    {{
+      "feature": "feature_name",
+      "original_value": "as string",
+      "direction": "increases_risk | decreases_risk | pushes_towards_approval | pushes_towards_rejection",
+      "relative_importance": "high | medium | low",
+      "commentary": "1–2 sentence explanation of how this feature influenced the decision."
+    }}
+  ],
+  "counterfactual_insights": {{
+    "summary": "2–3 sentence explanation of what would need to change to flip or significantly change the outcome, based ONLY on provided counterfactuals.",
+    "examples": [
+      {{
+        "description": "Short description of the scenario in human terms.",
+        "changed_features": {{ "feature": "from → to" }},
+        "new_prediction": "label / score from payload"
+      }}
+    ]
+  }},
+  "fairness_and_risk": {{
+    "uses_protected_attributes": "yes | no | unknown",
+    "protected_attribute_impact": "If any protected attributes are among top contributors, describe their role. Otherwise, say they are not among the main drivers.",
+    "notes": "Optional short note tying to group-level fairness metrics if provided."
+  }},
+  "recommended_actions": [
+    "Short bullet-style sentence tailored to the MODE, suggesting next steps or cautions."
+  ]
+}}
+```
+
+Generate the JSON object now, following the schema exactly and without adding extra top-level keys."""
 
     logger.info("Calling Claude for %s narrative…", mode)
     response = client.messages.create(
         model=MODEL,
-        max_tokens=800,
-        system=system_prompts.get(mode, system_prompts["manager"]),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
+        max_tokens=1500,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+        temperature=0.3,
     )
     
-    return response.content[0].text.strip()
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("Failed to parse LLM JSON: %s\nRaw: %s", exc, raw[:500])
+        return {"error": "Failed to generate structured explainability report.", "raw_text": raw}
