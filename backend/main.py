@@ -70,10 +70,12 @@ app.add_middleware(
 from backend.routers.upload import router as upload_router  # noqa: E402
 from backend.routers.analysis import router as analysis_router  # noqa: E402
 from backend.routers.courtroom import router as courtroom_router  # noqa: E402
+from backend.routers.remediation import router as remediation_router  # noqa: E402
 
 app.include_router(upload_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(courtroom_router, prefix="/api")
+app.include_router(remediation_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------
