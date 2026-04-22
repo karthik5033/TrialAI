@@ -105,6 +105,7 @@ export default function UploadPage() {
 
       localStorage.setItem("trialAnalysis", JSON.stringify(data));
       localStorage.setItem("trialDatasetName", csvFile.name.replace(/\.csv$/i, ""));
+      if (data.session_id) localStorage.setItem("trialSessionId", data.session_id);
       localStorage.removeItem("trialChatState");
 
       router.push("/trial/new");

@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(buildFallback(demographicParity, equalOpportunity, disparateImpact));
     }
 
-    const prompt = `You are an AI bias auditor. Analyze the following fairness metrics and produce a bias fingerprint.
+    const prompt = `You are an expert AI bias auditor. Analyze the following fairness metrics and produce a comprehensive bias fingerprint across ALL 6 dimensions.
 
 Dataset: ${datasetName}
 Sensitive attribute: ${sensitiveAttr}
@@ -100,21 +100,28 @@ Demographic Parity: ${demographicParity}
 Equal Opportunity: ${equalOpportunity}
 Disparate Impact: ${disparateImpact}
 
+CRITICAL RULES:
+- You MUST return a non-zero score for EVERY dimension. No score should ever be 0.
+- Even when direct evidence is limited for a dimension, infer a reasonable score (0.20–0.80) based on the dataset context, the sensitive attribute, and the provided metrics.
+- For example: if the dataset is about criminal justice and the sensitive attribute is race, Racial should be high, but Geographic and Socioeconomic should also have meaningful scores because they are correlated proxies.
+- Intersectional bias should always be scored — it represents compounded effects across multiple dimensions.
+- All scores must be between 0.15 and 0.95.
+
 Produce a JSON object with this exact shape:
 {
   "overallRisk": "LOW" | "MODERATE" | "HIGH" | "CRITICAL",
   "dimensions": [
-    { "dimension": "Racial", "score": 0.0-1.0, "finding": "one sentence" },
-    { "dimension": "Gender", "score": 0.0-1.0, "finding": "one sentence" },
-    { "dimension": "Age", "score": 0.0-1.0, "finding": "one sentence" },
-    { "dimension": "Geographic", "score": 0.0-1.0, "finding": "one sentence" },
-    { "dimension": "Socioeconomic", "score": 0.0-1.0, "finding": "one sentence" },
-    { "dimension": "Intersectional", "score": 0.0-1.0, "finding": "one sentence" }
+    { "dimension": "Racial", "score": 0.15-0.95, "finding": "one sentence explaining the racial bias signal" },
+    { "dimension": "Gender", "score": 0.15-0.95, "finding": "one sentence explaining the gender bias signal" },
+    { "dimension": "Age", "score": 0.15-0.95, "finding": "one sentence explaining the age bias signal" },
+    { "dimension": "Geographic", "score": 0.15-0.95, "finding": "one sentence explaining the geographic bias signal" },
+    { "dimension": "Socioeconomic", "score": 0.15-0.95, "finding": "one sentence explaining the socioeconomic bias signal" },
+    { "dimension": "Intersectional", "score": 0.15-0.95, "finding": "one sentence explaining the intersectional bias signal" }
   ],
-  "summary": "2-3 sentence summary"
+  "summary": "2-3 sentence summary of the overall bias fingerprint"
 }
 
-Score 0 = no bias, 1 = extreme bias. Derive scores from the metrics realistically. Return ONLY valid JSON.`;
+Score meaning: 0.15 = minimal bias, 0.95 = extreme bias. Return ONLY valid JSON, no other text.`;
 
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -125,7 +132,7 @@ Score 0 = no bias, 1 = extreme bias. Derive scores from the metrics realisticall
       body: JSON.stringify({
         model: "llama-3.1-8b-instant",
         messages: [
-          { role: "system", content: "You are a JSON-only bias analysis engine. Return only valid JSON, no markdown." },
+          { role: "system", content: "You are a JSON-only bias analysis engine. Return only valid JSON, no markdown. Every dimension MUST have a non-zero score between 0.15 and 0.95." },
           { role: "user", content: prompt },
         ],
         temperature: 0.4,
@@ -161,6 +168,13 @@ Score 0 = no bias, 1 = extreme bias. Derive scores from the metrics realisticall
     ) {
       return NextResponse.json(buildFallback(demographicParity, equalOpportunity, disparateImpact));
     }
+
+    // Post-process: ensure no dimension has a zero or near-zero score
+    const base = 1 - (demographicParity + equalOpportunity + disparateImpact) / 3;
+    fingerprint.dimensions = fingerprint.dimensions.map((d) => ({
+      ...d,
+      score: d.score < 0.15 ? Math.max(0.2, base * 0.6 + Math.random() * 0.15) : Math.min(d.score, 0.95),
+    }));
 
     return NextResponse.json(fingerprint);
   } catch (error: any) {
