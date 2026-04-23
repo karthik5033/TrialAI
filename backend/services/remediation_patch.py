@@ -112,7 +112,7 @@ def _has_joblib_dump(source: str) -> bool:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def apply_reweighing_patch(source: str) -> dict:
+def apply_reweighing_patch(source: str, sensitive_attr: str = None) -> dict:
     """
     Inject sample_weight into model.fit(X, y).
     Deterministic — LLM is NOT involved.
@@ -138,7 +138,14 @@ def apply_reweighing_patch(source: str) -> dict:
             # Insert weight computation above fit()
             new_lines.append(f"{indent}# === FAIRNESS PATCH: Reweighing ===\n")
             new_lines.append(f"{indent}from sklearn.utils.class_weight import compute_sample_weight as _cw\n")
-            new_lines.append(f"{indent}_sample_weights = _cw(class_weight='balanced', y=y)\n")
+            if sensitive_attr:
+                new_lines.append(f"{indent}import pandas as _pd_for_patch\n")
+                new_lines.append(f"{indent}_temp_df = _pd_for_patch.read_csv('dataset.csv')\n")
+                new_lines.append(f"{indent}_sensitive_vals = _temp_df['{sensitive_attr}'].values\n")
+                new_lines.append(f"{indent}_combined_y = [f'{{s}}_{{l}}' for s, l in zip(_sensitive_vals, y)]\n")
+                new_lines.append(f"{indent}_sample_weights = _cw(class_weight='balanced', y=_combined_y)\n")
+            else:
+                new_lines.append(f"{indent}_sample_weights = _cw(class_weight='balanced', y=y)\n")
             # Replace the fit line
             new_lines.append(f"{indent}model.fit(X, y, sample_weight=_sample_weights)\n")
             new_lines.append(f"{indent}# === END FAIRNESS PATCH ===\n")
@@ -177,7 +184,7 @@ def apply_reweighing_patch(source: str) -> dict:
     }
 
 
-def apply_threshold_patch(source: str) -> dict:
+def apply_threshold_patch(source: str, sensitive_attr: str = None) -> dict:
     """
     Append a post-processing threshold comment/documentation patch.
     (Threshold adjustment is applied in-memory at inference time,
@@ -207,7 +214,7 @@ def apply_threshold_patch(source: str) -> dict:
     }
 
 
-def apply_fairness_constraint_patch(source: str) -> dict:
+def apply_fairness_constraint_patch(source: str, sensitive_attr: str = None) -> dict:
     """
     Append a fairlearn ExponentiatedGradient block after the last fit() call.
     """
@@ -265,38 +272,47 @@ def generate_auto_script(
     Uses the dataset.csv present in the working directory.
     If feature_names provided, uses only those columns (matching original model).
     """
+    # Determine feature selection block using LabelEncoder to match bias_engine
+    feature_select_block = "\n".join([
+        "from sklearn.preprocessing import LabelEncoder",
+        f"X = df.drop(columns=[\"{target_column}\"])",
+        "for col in X.select_dtypes(include=['object', 'category']).columns:",
+        "    X[col] = LabelEncoder().fit_transform(X[col].astype(str))",
+        "if y.dtype == 'object':",
+        "    y = LabelEncoder().fit_transform(y.astype(str))",
+        f"_expected_features = {feature_names!r}" if feature_names else "_expected_features = None",
+        "if _expected_features:",
+        "    X = X[[c for c in _expected_features if c in X.columns]]"
+    ])
+
     reweigh_block = (
         "from sklearn.utils.class_weight import compute_sample_weight as _cw\n"
-        "_sample_weights = _cw(class_weight='balanced', y=y)\n"
-        "model.fit(X, y, sample_weight=_sample_weights)"
-    ) if strategy == "reweighing" else "model.fit(X, y)"
-
-    if feature_names:
-        feature_select = f"X = df[{feature_names!r}]"
-    else:
-        feature_select = f'X = df.drop(columns=["{target_column}"])'
+        f"sensitive_vals = df['{sensitive_attr}'].values\n"
+        "combined_y = [f'{s}_{l}' for s, l in zip(sensitive_vals, y)]\n"
+        "_sample_weights = _cw(class_weight='balanced', y=combined_y)\n"
+        "model.fit(X.values, y, sample_weight=_sample_weights)"
+    ) if strategy == "reweighing" else "model.fit(X.values, y)"
 
     lines = [
         "# === Auto-Generated Fairness Training Script (CephusAI) ===",
         "import pandas as pd",
         "import joblib",
+        "import numpy as np",
         "from sklearn.ensemble import RandomForestClassifier",
-        "from sklearn.preprocessing import LabelEncoder",
+        "from sklearn.linear_model import LogisticRegression",
         "",
         "# Load data",
         'df = pd.read_csv("dataset.csv")',
         "",
-        "# Encode categoricals",
-        'for col in df.select_dtypes(include="object").columns:',
-        '    df[col] = LabelEncoder().fit_transform(df[col].astype(str))',
-        "",
-        "# Split features / target",
-        feature_select,
+        "# Encode target",
         f'y = df["{target_column}"].values',
-        "X = X.values",
         "",
-        "# Build model",
-        "model = RandomForestClassifier(n_estimators=100, random_state=42)",
+        "# Build feature matrix",
+        feature_select_block,
+        "X = X.fillna(0)",
+        "",
+        "# Build model (RandomForest works without Pipeline for retraining)",
+        "model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42, class_weight='balanced')",
         "",
         f"# === FAIRNESS PATCH: {strategy} ===",
         reweigh_block,

@@ -77,13 +77,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Normalize and ensure all fields exist
-    const normalized = personas.slice(0, 12).map((p: any, i: number) => ({
-      name: p.name || FALLBACK_JURY[i].name,
-      age: typeof p.age === "number" ? p.age : FALLBACK_JURY[i].age,
-      occupation: p.occupation || FALLBACK_JURY[i].occupation,
-      demographicGroup: p.demographicGroup || p.demographic_group || p.demographic || FALLBACK_JURY[i].demographicGroup,
-      outcome: p.outcome === "Approved" || p.outcome === "Denied" ? p.outcome : FALLBACK_JURY[i].outcome,
-    }));
+    const normalized = personas.slice(0, 12).map((p: any, i: number) => {
+      let demo = p.demographicGroup || p.demographic_group || p.demographic || FALLBACK_JURY[i].demographicGroup;
+      if (typeof demo === "object" && demo !== null) {
+        demo = Object.entries(demo).map(([k, v]) => `${k}: ${v}`).join(", ");
+      }
+      return {
+        name: p.name || FALLBACK_JURY[i].name,
+        age: typeof p.age === "number" ? p.age : FALLBACK_JURY[i].age,
+        occupation: p.occupation || FALLBACK_JURY[i].occupation,
+        demographicGroup: demo,
+        outcome: p.outcome === "Approved" || p.outcome === "Denied" ? p.outcome : FALLBACK_JURY[i].outcome,
+      };
+    });
 
     return NextResponse.json(normalized);
   } catch (error: any) {

@@ -2,8 +2,11 @@
 AI Courtroom v2.0 — Remediation Router.
 
 POST /api/remediation/run/{session_id}
-    Apply a mitigation strategy, retrain, compare before/after metrics.
-    Persists RemediationRun to DB and saves the mitigated model to disk.
+    Starts remediation as a background task. Returns run_id immediately.
+    Ollama (qwen2.5-coder) is tried first; falls back to Groq API on timeout/failure.
+
+GET  /api/remediation/status/{run_id}
+    Poll the status of a background remediation run.
 
 GET  /api/remediation/{session_id}
     Retrieve persisted remediation results for a session.
@@ -16,17 +19,18 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.database import get_db
 from backend.models import (
@@ -36,7 +40,11 @@ from backend.models import (
     SessionStatus,
 )
 from backend.services.bias_engine import load_model
-from backend.services.remediation import run_remediation, STRATEGIES
+from backend.services.remediation_pipeline import run_local_remediation
+from backend.services.ollama_client import is_ollama_available, list_ollama_models
+
+# Validation set for strategies
+STRATEGIES = {"reweighing", "threshold_adjustment", "fairness_constraint"}
 
 logger = logging.getLogger("courtroom.remediation_router")
 
@@ -44,37 +52,199 @@ UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
 
+# ---------------------------------------------------------------------------
+# In-memory job store for background tasks
+# ---------------------------------------------------------------------------
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
+
+
+def _set_job(run_id: str, data: dict) -> None:
+    with _jobs_lock:
+        _jobs[run_id] = data
+
+
+def _get_job(run_id: str) -> dict | None:
+    with _jobs_lock:
+        return _jobs.get(run_id)
+
 
 # ---------------------------------------------------------------------------
 # Request schema
 # ---------------------------------------------------------------------------
 
 class RunRemediationRequest(BaseModel):
+    strategy: str = Field(default="auto", description="Mitigation strategy or 'auto'.")
     target_column: str = Field(..., description="Target/label column name.")
-    sensitive_attributes: list[str] = Field(
-        ..., min_length=1, description="Protected attribute column names."
-    )
-    strategy: str = Field(
-        default="reweighing",
-        description="Mitigation strategy: reweighing | threshold_adjustment | fairness_constraint",
-    )
+    sensitive_attributes: list[str] = Field(..., description="Protected attribute columns.")
+
+
+# ---------------------------------------------------------------------------
+# Background worker
+# ---------------------------------------------------------------------------
+
+def _run_remediation_worker(
+    run_id: str,
+    session_id: str,
+    model: Any,
+    df: pd.DataFrame,
+    target_column: str,
+    sensitive_attrs: list[str],
+    strategy: str,
+    session_dir: Path,
+    script_content: str | None,
+) -> None:
+    """Executes remediation in a background thread. Updates _jobs[run_id]."""
+    try:
+        _set_job(run_id, {**_get_job(run_id), "status": "running", "step": "Starting Ollama…"})
+
+        ollama_ok = is_ollama_available()
+        logger.info("Ollama available: %s", ollama_ok)
+
+        if ollama_ok:
+            _set_job(run_id, {**_get_job(run_id), "step": "Running local qwen2.5-coder pipeline…"})
+
+        if strategy in ["auto", "optimize"]:
+            _set_job(run_id, {**_get_job(run_id), "step": "Optimizing tradeoffs (testing 3 strategies)…"})
+            import shutil
+            
+            best_result = None
+            best_score = -float('inf')
+            
+            for cand in ["reweighing", "threshold_adjustment", "fairness_constraint"]:
+                logger.info("Optimizing: Trying strategy %s", cand)
+                try:
+                    res = run_local_remediation(
+                        model=model,
+                        df=df,
+                        target_column=target_column,
+                        sensitive_attrs=sensitive_attrs,
+                        session_dir=session_dir,
+                        strategy=cand,
+                        script_content=script_content,
+                        timeout=180,
+                    )
+                    
+                    # Score the result: combine accuracy and DIR closeness to 1
+                    acc = res["mitigated_accuracy"]
+                    dir_val = res["mitigated_dir"]
+                    
+                    # Compute score (penalize DIR deviation from 1.0)
+                    dir_score = 1.0 - abs(1.0 - dir_val)
+                    score = (acc * 0.4) + (dir_score * 0.6)
+                    
+                    logger.info("Strategy %s score: %.4f (Acc: %.4f, DIR: %.4f)", cand, score, acc, dir_val)
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_result = res
+                        # Backup the best artifacts
+                        if (session_dir / "mitigated_model.pkl").exists():
+                            shutil.copy(session_dir / "mitigated_model.pkl", session_dir / "best_model.pkl")
+                        if (session_dir / "mitigated_script.py").exists():
+                            shutil.copy(session_dir / "mitigated_script.py", session_dir / "best_script.py")
+                            
+                except Exception as e:
+                    logger.error("Strategy %s failed during optimization: %s", cand, e)
+            
+            if best_result is None:
+                raise ValueError("All optimization strategies failed.")
+                
+            # Restore the best artifacts
+            if (session_dir / "best_model.pkl").exists():
+                shutil.copy(session_dir / "best_model.pkl", session_dir / "mitigated_model.pkl")
+            if (session_dir / "best_script.py").exists():
+                shutil.copy(session_dir / "best_script.py", session_dir / "mitigated_script.py")
+                
+            result = best_result
+        else:
+            result = run_local_remediation(
+                model=model,
+                df=df,
+                target_column=target_column,
+                sensitive_attrs=sensitive_attrs,
+                session_dir=session_dir,
+                strategy=strategy,
+                script_content=script_content,
+                timeout=180,
+            )
+
+        # Save mitigated model
+        mitigated_model_path = session_dir / "mitigated_model.pkl"
+        if not mitigated_model_path.exists() and result.get("mitigated_model"):
+            try:
+                joblib.dump(result["mitigated_model"], str(mitigated_model_path))
+            except Exception as exc:
+                logger.error("Failed to save mitigated model: %s", exc)
+
+        _set_job(run_id, {
+            **_get_job(run_id),
+            "status": "complete",
+            "step": "Done",
+            "result": {
+                "session_id": session_id,
+                "remediation_id": run_id,
+                "strategy": result["strategy"],
+                "model_type": result["model_type"],
+                "original_accuracy": result["original_accuracy"],
+                "mitigated_accuracy": result["mitigated_accuracy"],
+                "original_dir": result["original_dir"],
+                "mitigated_dir": result["mitigated_dir"],
+                "improvements": result["improvements"],
+                "before": {m["metric_name"]: m["original_value"] for m in result.get("improvements", [])},
+                "after": {m["metric_name"]: m["mitigated_value"] for m in result.get("improvements", [])},
+                "improvement": {
+                    m["metric_name"]: (
+                        0.0 if not m["original_value"] else (
+                            (m["mitigated_value"] - m["original_value"]) / abs(m["original_value"]) * 100
+                            if "difference" not in m["metric_name"] else 
+                            (m["original_value"] - m["mitigated_value"]) / abs(m["original_value"]) * 100
+                        )
+                    )
+                    for m in result.get("improvements", [])
+                },
+                "new_accuracy": result.get("mitigated_accuracy"),
+                "script_diff": result.get("script_diff", ""),
+                "modified_script": result.get("modified_script", ""),
+                "original_script": result.get("original_script", ""),
+                "patch_applied": result.get("patch_applied", False),
+                "patch_description": result.get("patch_description", ""),
+                "llm_explanation": result.get("llm_explanation"),
+                "reevaluation_report": result.get("reevaluation_report"),
+                "strategy_info": result.get("strategy_info", {}),
+                "script_execution": result.get("script_execution", {}),
+                "all_passed": result.get("all_passed", False),
+                "ollama_used": ollama_ok,
+            }
+        })
+        logger.info("Background remediation complete: run_id=%s strategy=%s", run_id, result["strategy"])
+
+    except Exception as exc:
+        logger.exception("Background remediation failed: run_id=%s", run_id)
+        _set_job(run_id, {
+            **(_get_job(run_id) or {}),
+            "status": "failed",
+            "step": "Failed",
+            "error": str(exc),
+        })
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  POST /api/remediation/run/{session_id}
+#  POST /api/remediation/run/{session_id}  — starts background job
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/run/{session_id}")
 async def run_remediation_endpoint(
     session_id: str,
     body: RunRemediationRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Apply a bias mitigation strategy, retrain the model, and compare
-    before/after fairness metrics.
+    Starts remediation as a background task. Returns run_id immediately (fast).
+    Poll /api/remediation/status/{run_id} to get progress and results.
     """
-    # ── 1. Validate ─────────────────────────────────────────────────────────
+    # ── 1. Validate session_id ─────────────────────────────────────────────
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -90,12 +260,7 @@ async def run_remediation_endpoint(
             detail=f"Session status is '{session.status.value}'. Run analysis first.",
         )
 
-    if body.strategy not in STRATEGIES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown strategy '{body.strategy}'. "
-                   f"Available: {list(STRATEGIES.keys())}",
-        )
+    effective_strategy = body.strategy if body.strategy in STRATEGIES else "reweighing"
 
     # ── 2. Load files ──────────────────────────────────────────────────────
     session_dir = UPLOAD_DIR / session_id
@@ -124,7 +289,7 @@ async def run_remediation_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load model: {exc}")
 
-    # ── 3. Load script if available ────────────────────────────────────────
+    # ── 3. Load optional script ────────────────────────────────────────────
     script_path = session_dir / "script.py"
     script_content = None
     if script_path.exists():
@@ -133,82 +298,62 @@ async def run_remediation_endpoint(
         except Exception as exc:
             logger.warning("Failed to read script.py: %s", exc)
 
-    # ── 4. Create pending DB record ─────────────────────────────────────────
+    # ── 4. Create DB record ────────────────────────────────────────────────
     run_row = RemediationRun(
         session_id=sid,
-        strategy_used=body.strategy,
+        strategy_used=effective_strategy,
         status=RemediationStatus.running,
     )
     db.add(run_row)
     await db.commit()
     await db.refresh(run_row)
+    run_id = str(run_row.id)
 
-    # ── 4. Run remediation ──────────────────────────────────────────────────
-    try:
-        result = run_remediation(
-            model=model,
-            df=df,
-            target_column=body.target_column,
-            sensitive_attrs=body.sensitive_attributes,
-            strategy=body.strategy,
-            script_content=script_content,
-        )
-    except Exception as exc:
-        run_row.status = RemediationStatus.failed
-        await db.commit()
-        logger.exception("Remediation failed for session %s", session_id)
-        raise HTTPException(status_code=500, detail=f"Remediation failed: {exc}")
-
-    # ── 5. Save mitigated model to disk ───────────────────────────────────
-    mitigated_model_path = session_dir / "mitigated_model.pkl"
-    try:
-        joblib.dump(result["mitigated_model"], str(mitigated_model_path))
-    except Exception as exc:
-        logger.error("Failed to save mitigated model: %s", exc)
-
-    # Save modified script to disk if generated
-    if result.get("modified_script"):
-        try:
-            (session_dir / "mitigated_script.py").write_text(
-                result["modified_script"], encoding="utf-8"
-            )
-        except Exception as exc:
-            logger.error("Failed to save mitigated script: %s", exc)
-
-    # ── 6. Update DB record ─────────────────────────────────────────────────
-    run_row.original_dir = result["original_dir"]
-    run_row.mitigated_dir = result["mitigated_dir"]
-    run_row.original_accuracy = result["original_accuracy"]
-    run_row.mitigated_accuracy = result["mitigated_accuracy"]
-    run_row.script_diff = result["script_diff"]
-    run_row.llm_explanation = result.get("llm_explanation")
-    run_row.reevaluation_report = result.get("reevaluation_report")
-    run_row.status = RemediationStatus.complete
-    await db.commit()
-    await db.refresh(run_row)
-
-    logger.info(
-        "Remediation complete: session=%s strategy=%s DIR %.4f→%.4f acc %.4f→%.4f",
-        session_id, body.strategy,
-        result["original_dir"], result["mitigated_dir"],
-        result["original_accuracy"], result["mitigated_accuracy"],
-    )
-
-    # ── 7. Return result (exclude the model object) ─────────────────────────
-    return {
+    # ── 5. Register job in memory ──────────────────────────────────────────
+    _set_job(run_id, {
+        "status": "pending",
+        "step": "Queued",
         "session_id": session_id,
-        "remediation_id": str(run_row.id),
-        "strategy": result["strategy"],
-        "model_type": result["model_type"],
-        "original_accuracy": result["original_accuracy"],
-        "mitigated_accuracy": result["mitigated_accuracy"],
-        "original_dir": result["original_dir"],
-        "mitigated_dir": result["mitigated_dir"],
-        "improvements": result["improvements"],
-        "script_diff": result["script_diff"],
-        "llm_explanation": result.get("llm_explanation"),
-        "reevaluation_report": result.get("reevaluation_report"),
-        "all_passed": result["all_passed"],
+        "result": None,
+        "error": None,
+    })
+
+    # ── 6. Launch background thread ────────────────────────────────────────
+    t = threading.Thread(
+        target=_run_remediation_worker,
+        args=(run_id, session_id, model, df, body.target_column,
+              body.sensitive_attributes, effective_strategy, session_dir, script_content),
+        daemon=True,
+    )
+    t.start()
+    logger.info("Remediation background thread started: run_id=%s session=%s", run_id, session_id)
+
+    # Return immediately — frontend polls /status/{run_id}
+    return {
+        "run_id": run_id,
+        "session_id": session_id,
+        "status": "pending",
+        "message": "Remediation started. Poll /api/remediation/status/{run_id} for progress.",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GET /api/remediation/status/{run_id}  — poll job progress
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/status/{run_id}")
+async def get_remediation_status(run_id: str):
+    """Poll the status of a background remediation run."""
+    job = _get_job(run_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+
+    return {
+        "run_id": run_id,
+        "status": job["status"],        # pending | running | complete | failed
+        "step": job.get("step", ""),
+        "error": job.get("error"),
+        "result": job.get("result"),    # populated when status == complete
     }
 
 
@@ -259,29 +404,35 @@ async def get_remediation(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  GET /api/remediation/{session_id}/download
+#  GET /api/remediation/{session_id}/download/{download_type}
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/{session_id}/download")
-async def download_mitigated_model(
+@router.get("/{session_id}/download/{download_type}")
+async def download_mitigated_artifacts(
     session_id: str,
+    download_type: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Download the mitigated model .pkl file."""
+    """Download the mitigated model .pkl file or the mitigated script .py file."""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid session_id format.")
 
-    mitigated_path = UPLOAD_DIR / session_id / "mitigated_model.pkl"
-    if not mitigated_path.exists():
+    if download_type not in ["model", "script"]:
+        raise HTTPException(status_code=400, detail="Invalid download type. Must be 'model' or 'script'.")
+
+    filename = "mitigated_model.pkl" if download_type == "model" else "mitigated_script.py"
+    file_path = UPLOAD_DIR / session_id / filename
+
+    if not file_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="No mitigated model found. Run remediation first.",
+            detail=f"No {download_type} found. Run remediation first.",
         )
 
     return FileResponse(
-        str(mitigated_path),
-        filename="mitigated_model.pkl",
-        media_type="application/octet-stream",
+        str(file_path),
+        filename=filename,
+        media_type="application/octet-stream" if download_type == "model" else "text/x-python",
     )

@@ -1,6 +1,6 @@
 """
 AI Courtroom v2.0 — FastAPI Application Entry Point.
-
+# Reload triggered for Ollama
 Wires up:
   - async lifespan (DB init on startup, engine dispose on shutdown)
   - CORS middleware for Next.js frontend at localhost:3000
@@ -10,18 +10,27 @@ Wires up:
 
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 
+# Add the parent directory to sys.path so that 'backend' module is found
+# when running `uvicorn main:app` directly from the backend directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from dotenv import load_dotenv
+load_dotenv()
+
+# Force absolute paths for DB and Uploads to prevent splitting state
+# depending on where Uvicorn is executed from.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["UPLOAD_DIR"] = os.path.join(BASE_DIR, "uploads")
+if "sqlite" in os.environ.get("DATABASE_URL", "sqlite"):
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{os.path.join(BASE_DIR, 'courtroom.db')}".replace("\\", "/")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.database import lifespan, check_db_connection
-
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
-load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Logging

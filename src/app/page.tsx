@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { ArrowRight, Upload, Scale, RefreshCw, Briefcase, HeartPulse, Building, Scale as ScaleIcon, ChevronRight, Activity } from "lucide-react";
+import { ArrowRight, Upload, Scale, RefreshCw, Briefcase, HeartPulse, Building, Scale as ScaleIcon, ChevronRight, Activity, Code2, Fingerprint } from "lucide-react";
 import Link from "next/link";
 
 const CountUp = ({ value, decimals = 2 }: { value: number, decimals?: number }) => {
@@ -47,9 +46,9 @@ export default function LandingPage() {
   }, []);
 
   return (
-    <div className="relative min-h-screen text-white overflow-hidden selection:bg-gold/30 font-sans">
+    <div className="relative min-h-screen text-white selection:bg-gold/30 font-sans">
       {/* Video Background */}
-      <div className="fixed inset-0 w-full h-full z-[-2]">
+      <div className="fixed inset-0 w-full h-full z-[-2] overflow-hidden">
         <video 
           autoPlay 
           loop 
@@ -68,44 +67,25 @@ export default function LandingPage() {
       {/* Hero Section */}
       <section id="about" className="relative pt-32 pb-20 px-6">
         <div className="max-w-5xl mx-auto text-center relative z-10 pt-20">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-          >
+          <div>
             <span className="inline-flex items-center gap-2 py-1.5 px-4 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-gold font-mono text-xs uppercase tracking-widest mb-8 shadow-2xl">
               <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
               v1.0 Production Ready
             </span>
-          </motion.div>
+          </div>
           
-          <motion.h1 
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.1, ease: "easeOut" }}
-            className="text-6xl md:text-8xl font-black tracking-tight mb-8 leading-[1.05]"
-          >
+          <h1 className="text-6xl md:text-8xl font-black tracking-tight mb-8 leading-[1.05]">
             Put your AI on trial. <br className="hidden md:block" />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-white to-white/50">
               Before the world does.
             </span>
-          </motion.h1>
+          </h1>
 
-          <motion.p 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
-            className="text-xl md:text-2xl text-white/70 max-w-3xl mx-auto mb-12 leading-relaxed font-light"
-          >
+          <p className="text-xl md:text-2xl text-white/70 max-w-3xl mx-auto mb-12 leading-relaxed font-light">
             An adversarial multi-agent courtroom simulation that interrogates AI models for hidden bias in hiring, lending, healthcare, and criminal justice.
-          </motion.p>
+          </p>
 
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.3, ease: "easeOut" }}
-            className="flex flex-col sm:flex-row items-center justify-center gap-5"
-          >
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-5">
             <Link 
               href="/demo"
               className="group flex items-center gap-3 bg-gold hover:bg-yellow-500 text-black font-bold px-10 py-5 rounded-xl transition-all shadow-[0_0_40px_rgba(212,175,55,0.3)] hover:shadow-[0_0_60px_rgba(212,175,55,0.5)] hover:-translate-y-1"
@@ -119,7 +99,7 @@ export default function LandingPage() {
             >
               Upload Dataset
             </Link>
-          </motion.div>
+          </div>
         </div>
       </section>
 
@@ -203,12 +183,8 @@ export default function LandingPage() {
               { icon: Scale, title: "2. The Trial", desc: "Prosecution and Defense LLM agents debate bias metrics while a synthetic jury experiences the model.", color: "text-red-400", bg: "bg-red-500/20 border-red-500/30" },
               { icon: RefreshCw, title: "3. Verdict & Reform", desc: "The Judge delivers a structured verdict and applies mitigation techniques for a fairer retrial.", color: "text-gold", bg: "bg-gold/20 border-gold/30" }
             ].map((step, i) => (
-              <motion.div 
+              <div 
                 key={i}
-                initial={{ opacity: 0, y: 30 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.7, delay: i * 0.2 }}
                 className="relative bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-10 hover:bg-black/60 hover:border-white/20 transition-all group"
               >
                 <div className={`w-16 h-16 rounded-xl border ${step.bg} ${step.color} flex items-center justify-center mb-8 group-hover:scale-110 transition-transform`}>
@@ -216,7 +192,7 @@ export default function LandingPage() {
                 </div>
                 <h3 className="text-2xl font-bold mb-4">{step.title}</h3>
                 <p className="text-white/60 leading-relaxed font-light text-lg">{step.desc}</p>
-              </motion.div>
+              </div>
             ))}
           </div>
         </div>
@@ -257,6 +233,71 @@ export default function LandingPage() {
                 <div><span className="text-red-400 font-bold">PROSECUTION: </span><span className="text-white/70">The data shows a disparate impact ratio of 0.62 for African American applicants.</span></div>
                 <div><span className="text-blue-400 font-bold">DEFENSE: </span><span className="text-white/70">Zip code correlates with employment tenure in this dataset.</span></div>
                 <div><span className="text-gold font-bold">JUDGE: </span><span className="text-white/70">Objection overruled. Proxy variables for protected classes violate demographic parity.</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features & Documentation Section */}
+      <section className="py-32 px-6 relative z-10 border-t border-white/10 bg-black/40">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-20">
+            <h2 className="text-4xl md:text-5xl font-black mb-6">Platform Capabilities</h2>
+            <p className="text-white/60 max-w-2xl mx-auto text-xl font-light">Comprehensive tools for auditing, mitigating, and documenting AI fairness.</p>
+          </div>
+
+          {/* Features Grid */}
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-24">
+            {[
+              { title: "Adversarial LLMs", desc: "Multi-agent debate system that interrogates model decisions and uncovers proxy biases.", icon: Activity, color: "text-red-400" },
+              { title: "Auto-Remediation", desc: "Automated script patching using reweighing, threshold adjustment, and fairness constraints.", icon: Code2, color: "text-blue-400" },
+              { title: "SHAP Fingerprinting", desc: "Deep feature importance analysis to visualize exactly which attributes drive biased outcomes.", icon: Fingerprint, color: "text-gold" },
+              { title: "Metric Tradeoffs", desc: "Interactive visualization of the accuracy vs. fairness tradeoff to find the optimal balance.", icon: ScaleIcon, color: "text-green-400" }
+            ].map((feature, i) => (
+              <div key={i} className="bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6 hover:-translate-y-1 transition-all">
+                <div className={`w-12 h-12 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center mb-6 ${feature.color}`}>
+                  <feature.icon className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold mb-2">{feature.title}</h3>
+                <p className="text-sm text-white/50 leading-relaxed">{feature.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Documentation Section */}
+          <div className="bg-gradient-to-r from-blue-900/20 via-black/40 to-red-900/20 rounded-3xl border border-white/10 p-10 md:p-16 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-gold/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+            
+            <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-10">
+              <div className="md:w-1/2">
+                <h2 className="text-3xl font-black mb-4">Technical Documentation</h2>
+                <p className="text-white/60 text-lg mb-8 leading-relaxed">
+                  Explore our comprehensive guides, API references, and architectural deep-dives to integrate TrialAI into your ML pipeline.
+                </p>
+                <div className="flex flex-col gap-4">
+                  <a href="#" className="group flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors">
+                    <span className="font-medium text-white/80 group-hover:text-white transition-colors">Quick Start Guide</span>
+                    <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white group-hover:translate-x-1 transition-all" />
+                  </a>
+                  <a href="#" className="group flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors">
+                    <span className="font-medium text-white/80 group-hover:text-white transition-colors">Supported Fairness Metrics</span>
+                    <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white group-hover:translate-x-1 transition-all" />
+                  </a>
+                  <a href="#" className="group flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors">
+                    <span className="font-medium text-white/80 group-hover:text-white transition-colors">Auto-Remediation API</span>
+                    <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white group-hover:translate-x-1 transition-all" />
+                  </a>
+                </div>
+              </div>
+              <div className="md:w-1/2 flex justify-center">
+                <div className="w-full max-w-sm aspect-square relative">
+                  <div className="absolute inset-0 border-2 border-dashed border-white/20 rounded-full animate-[spin_60s_linear_infinite]" />
+                  <div className="absolute inset-4 border border-white/10 rounded-full animate-[spin_40s_linear_infinite_reverse]" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Code2 className="w-16 h-16 text-gold/50" />
+                  </div>
+                </div>
               </div>
             </div>
           </div>

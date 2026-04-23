@@ -82,6 +82,9 @@ export default function NewTrialVerdictPage() {
     const rawAnalysis = localStorage.getItem("trialAnalysis");
     const rawName = localStorage.getItem("trialDatasetName");
     const rawSessionId = localStorage.getItem("trialSessionId");
+    // Dedicated keys for retrain — always stored at upload time
+    const rawTargetCol = localStorage.getItem("trialTargetColumn");
+    const rawSensitiveAttrs = localStorage.getItem("trialSensitiveAttrs");
 
     if (!rawAnalysis) {
       router.push("/trial/upload");
@@ -90,6 +93,11 @@ export default function NewTrialVerdictPage() {
 
     try {
       const data = JSON.parse(rawAnalysis);
+      // Merge dedicated backup keys so retrain always has these fields
+      if (rawTargetCol && !data.target_column) data.target_column = rawTargetCol;
+      if (rawSensitiveAttrs && !data.sensitive_attributes) {
+        try { data.sensitive_attributes = JSON.parse(rawSensitiveAttrs); } catch {}
+      }
       setAnalysis(data);
       setDatasetName(rawName || "Dataset");
       setSessionId(rawSessionId || data.session_id || null);
@@ -106,9 +114,9 @@ export default function NewTrialVerdictPage() {
 
       if (data.fairness_metrics) {
         setFairnessMetrics({
-          demographic_parity: data.fairness_metrics.demographic_parity ?? 1,
-          equal_opportunity: data.fairness_metrics.equal_opportunity ?? 1,
-          disparate_impact: data.fairness_metrics.disparate_impact ?? 1,
+          demographic_parity: data.fairness_metrics.demographicParity ?? data.fairness_metrics.demographic_parity ?? 1,
+          equal_opportunity: data.fairness_metrics.equalOpportunity ?? data.fairness_metrics.equal_opportunity ?? 1,
+          disparate_impact: data.fairness_metrics.disparateImpact ?? data.fairness_metrics.disparate_impact ?? 1,
         });
       }
 
@@ -143,41 +151,93 @@ export default function NewTrialVerdictPage() {
     setStatusIdx(0);
 
     try {
-      const res = await fetch("/api/mitigate-and-retrain", {
+      // Resolve target column & sensitive attrs — stored directly in the analysis object
+      const targetCol = analysis?.target_column || analysis?.primary_protected_attribute || "";
+      const sensitiveAttrs = analysis?.sensitive_attributes ?? 
+                             (analysis?.primary_protected_attribute ? [analysis.primary_protected_attribute] : []);
+
+      if (!targetCol) {
+        throw new Error("Target column not found in analysis data. Please re-upload your dataset.");
+      }
+
+      const requestBody = { 
+        strategy: "optimize",
+        target_column: targetCol,
+        sensitive_attributes: sensitiveAttrs
+      };
+      console.log("[Retrain] Sending:", requestBody, "sessionId:", sessionId);
+
+      const res = await fetch(`/api/remediation/run/${sessionId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify(requestBody),
       });
 
       const rawText = await res.text();
-      let data;
+      let initData;
       try {
-        data = JSON.parse(rawText);
+        initData = JSON.parse(rawText);
       } catch {
         throw new Error(`Server returned invalid response: ${rawText.slice(0, 200)}`);
       }
 
-      if (!res.ok && !data.retrain_success && data.retrain_success !== false) {
-        throw new Error(data.error || data.rawResponse || "Retrain failed");
+      if (!res.ok) {
+        throw new Error(initData.error || initData.detail || initData.rawResponse || "Failed to start retrain");
       }
 
-      if (data.retrain_success === false) {
-        const errMsg = data.error || "Retrain script failed";
-        const stderr = data.stderr ? `
+      const runId = initData.run_id;
+      if (!runId) {
+        throw new Error("Backend did not return a run_id for polling.");
+      }
 
-Script error:
-${data.stderr.slice(-500)}` : "";
+      // --- Poll for status ---
+      let isComplete = false;
+      let finalData = null;
+      let pollCount = 0;
+      
+      while (!isComplete && pollCount < 120) { // Max 4 minutes
+        pollCount++;
+        await new Promise(resolve => setTimeout(resolve, 2000)); // poll every 2s
+        
+        const statusRes = await fetch(`/api/remediation/status/${runId}`);
+        const statusData = await statusRes.json();
+        
+        if (!statusRes.ok) {
+          throw new Error(statusData.detail || "Failed to poll status");
+        }
+        
+        if (statusData.status === "failed") {
+          throw new Error(statusData.error || "Background task failed");
+        }
+        
+        if (statusData.status === "complete") {
+          isComplete = true;
+          finalData = statusData.result;
+          break;
+        }
+        
+        // Optionally update UI with statusData.step if we had a state for it
+      }
+
+      if (!isComplete || !finalData) {
+        throw new Error("Remediation timed out.");
+      }
+
+      if (finalData.retrain_success === false) {
+        const errMsg = finalData.error || finalData.detail || "Retrain script failed";
+        const stderr = finalData.stderr ? `\n\nScript error:\n${finalData.stderr.slice(-500)}` : "";
         setRetrainError(errMsg + stderr);
         return;
       }
 
-      setRetrainResult(data);
+      setRetrainResult(finalData);
+      
       // Update the original script from the backend response if available
-      if (data.original_script) {
-        setOriginalScript(data.original_script);
+      if (finalData.original_script) {
+        setOriginalScript(finalData.original_script);
       }
-      if (data.modified_script) {
-        startTyping(data.modified_script);
+      if (finalData.modified_script) {
+        startTyping(finalData.modified_script);
       }
     } catch (err: any) {
       setRetrainError(err.message || "Retrain failed.");
@@ -211,7 +271,7 @@ ${data.stderr.slice(-500)}` : "";
       ]),
     });
 
-    let yPos = (doc as any).lastAutoTable.finalY + 15;
+    let yPos = (doc as any).lastAutoTable?.finalY || (doc as any).autoTable?.previous?.finalY || 100;
 
     if (shapData.length > 0) {
       doc.setFontSize(14);
@@ -221,7 +281,7 @@ ${data.stderr.slice(-500)}` : "";
         head: [["Feature", "Importance"]],
         body: [...shapData].reverse().map(s => [s.feature, s.importance.toFixed(4)]),
       });
-      yPos = (doc as any).lastAutoTable.finalY + 15;
+      yPos = (doc as any).lastAutoTable?.finalY || (doc as any).autoTable?.previous?.finalY || (yPos + 50);
     }
 
     if (retrainResult) {
@@ -540,7 +600,7 @@ ${data.stderr.slice(-500)}` : "";
                     </div>
                     <div className="p-4 bg-transparent border border-white/10 rounded-xl text-center">
                       <p className="text-xs text-white/50 uppercase font-bold mb-1">New Accuracy</p>
-                      <p className="text-2xl font-bold text-blue-400">{((retrainResult.new_accuracy || 0) * 100).toFixed(1)}%</p>
+                      <p className="text-2xl font-bold text-blue-400">{((retrainResult.mitigated_accuracy || retrainResult.new_accuracy || 0) * 100).toFixed(1)}%</p>
                     </div>
                   </div>
 

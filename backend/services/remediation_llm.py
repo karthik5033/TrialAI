@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import requests
 from typing import Optional
 
 from backend.services.ollama_client import call_ollama_json, call_ollama, is_ollama_available
@@ -20,6 +22,54 @@ logger = logging.getLogger("courtroom.remediation_llm")
 
 VALID_STRATEGIES = {"reweighing", "threshold_adjustment", "fairness_constraint"}
 DEFAULT_STRATEGY = "reweighing"
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Groq API fallback helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _call_groq(system: str, prompt: str, temperature: float = 0.3, max_tokens: int = 512) -> str:
+    """Call Groq API as fallback when Ollama is unavailable or times out."""
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY not configured")
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json={
+            "model": GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def _call_groq_json(system: str, prompt: str, fallback: dict) -> dict:
+    """Call Groq and parse JSON response."""
+    try:
+        raw = _call_groq(system, prompt, temperature=0.1, max_tokens=256)
+        text = raw.strip()
+        # Strip markdown fences
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:])
+            if text.strip().endswith("```"):
+                text = text.strip().rsplit("```", 1)[0].strip()
+        start, end = text.find("{"), text.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(text[start:end])
+    except Exception as exc:
+        logger.warning("Groq JSON fallback failed: %s", exc)
+    return fallback
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,12 +98,8 @@ def select_strategy_with_ollama(
         {"strategy": str, "reason": str, "source": "ollama" | "fallback"}
     """
     if not is_ollama_available():
-        logger.warning("Ollama not available — using default strategy: %s", DEFAULT_STRATEGY)
-        return {
-            "strategy": DEFAULT_STRATEGY,
-            "reason": "Ollama unavailable — using default reweighing strategy.",
-            "source": "fallback",
-        }
+        logger.warning("Ollama not available — trying Groq fallback")
+        return _select_strategy_via_groq(fairness_metrics, sensitive_attrs)
 
     # Format metrics summary for the prompt
     failed_metrics = [m for m in fairness_metrics if not m.get("passed", True)]
@@ -78,29 +124,59 @@ Return ONLY the JSON object as instructed."""
 
     logger.info("Asking Ollama to select mitigation strategy...")
 
-    result = call_ollama_json(
-        prompt=prompt,
-        system=STRATEGY_SYSTEM,
-        fallback={"strategy": DEFAULT_STRATEGY, "reason": "LLM parse failed"},
-    )
+    try:
+        result = call_ollama_json(
+            prompt=prompt,
+            system=STRATEGY_SYSTEM,
+            fallback=None,
+        )
+        if result is None:
+            raise RuntimeError("Ollama returned empty result")
+    except Exception as exc:
+        logger.warning("Ollama strategy selection failed (%s) — falling back to Groq", exc)
+        return _select_strategy_via_groq(fairness_metrics, sensitive_attrs)
 
     strategy = result.get("strategy", DEFAULT_STRATEGY).strip().lower()
 
-    # Validate — never trust LLM output blindly
     if strategy not in VALID_STRATEGIES:
         logger.warning(
-            "Ollama returned invalid strategy '%s' — falling back to '%s'",
+            "LLM returned invalid strategy '%s' — falling back to '%s'",
             strategy, DEFAULT_STRATEGY
         )
         strategy = DEFAULT_STRATEGY
 
-    logger.info("Ollama selected strategy: %s | reason: %s", strategy, result.get("reason", ""))
+    logger.info("Strategy selected: %s | reason: %s", strategy, result.get("reason", ""))
 
     return {
         "strategy": strategy,
         "reason": result.get("reason", "Strategy selected by local LLM."),
         "source": "ollama",
     }
+
+
+def _select_strategy_via_groq(
+    fairness_metrics: list[dict],
+    sensitive_attrs: list[str],
+) -> dict:
+    """Groq API fallback for strategy selection."""
+    failed_metrics = [m for m in fairness_metrics if not m.get("passed", True)]
+    metrics_lines = [
+        f"  - {m['metric_name']}: {m['metric_value']:.4f} (threshold={m['threshold']}, "
+        f"{'FAILED' if not m.get('passed', True) else 'passed'})"
+        for m in fairness_metrics
+    ]
+    prompt = (
+        f"Choose a fairness mitigation strategy. Protected attributes: {', '.join(sensitive_attrs)}. "
+        f"Failed metrics: {len(failed_metrics)}/{len(fairness_metrics)}.\n"
+        + "\n".join(metrics_lines)
+        + "\nReturn ONLY the JSON object."
+    )
+    result = _call_groq_json(STRATEGY_SYSTEM, prompt, fallback={"strategy": DEFAULT_STRATEGY, "reason": "Groq fallback"})
+    strategy = result.get("strategy", DEFAULT_STRATEGY).strip().lower()
+    if strategy not in VALID_STRATEGIES:
+        strategy = DEFAULT_STRATEGY
+    logger.info("Groq selected strategy: %s", strategy)
+    return {"strategy": strategy, "reason": result.get("reason", "Selected via Groq fallback."), "source": "groq"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,7 +202,10 @@ def generate_explanation_with_ollama(
     Falls back to a template if Ollama is unavailable.
     """
     if not is_ollama_available():
-        return _template_explanation(
+        logger.warning("Ollama not available — trying Groq for explanation")
+        return _explain_via_groq(
+            strategy, original_metrics, mitigated_metrics, original_accuracy, mitigated_accuracy
+        ) or _template_explanation(
             strategy, original_metrics, mitigated_metrics, original_accuracy, mitigated_accuracy
         )
 
@@ -152,11 +231,15 @@ Write a plain English explanation in 3-4 sentences for a technical audience."""
 
     try:
         explanation = call_ollama(prompt=prompt, system=EXPLANATION_SYSTEM, temperature=0.4)
+        if not explanation:
+            raise RuntimeError("Empty response from Ollama")
         logger.info("Ollama explanation generated (%d chars)", len(explanation))
         return explanation.strip()
     except Exception as exc:
-        logger.warning("Ollama explanation failed: %s — using template", exc)
-        return _template_explanation(
+        logger.warning("Ollama explanation failed: %s — trying Groq", exc)
+        return _explain_via_groq(
+            strategy, original_metrics, mitigated_metrics, original_accuracy, mitigated_accuracy, prompt
+        ) or _template_explanation(
             strategy, original_metrics, mitigated_metrics, original_accuracy, mitigated_accuracy
         )
 
@@ -195,3 +278,40 @@ def _template_explanation(
     lines.append(f"{passed_after}/{total} fairness metrics now pass their thresholds.")
 
     return " ".join(lines)
+
+
+def _explain_via_groq(
+    strategy: str,
+    original_metrics: list[dict],
+    mitigated_metrics: list[dict],
+    original_accuracy: float,
+    mitigated_accuracy: float,
+    prompt: str = None,
+) -> str | None:
+    """Groq API fallback for explanation."""
+    if prompt is None:
+        def fmt_metrics(metrics: list[dict]) -> str:
+            return "\n".join(
+                f"  - {m['metric_name']}: {m['metric_value']:.4f} "
+                f"({'passed' if m.get('passed') else 'FAILED'})"
+                for m in metrics
+            )
+        prompt = f"""A bias mitigation was applied to an ML model. Explain what happened.
+
+Strategy applied: {strategy}
+
+BEFORE metrics (accuracy={original_accuracy:.4f}):
+{fmt_metrics(original_metrics)}
+
+AFTER metrics (accuracy={mitigated_accuracy:.4f}):
+{fmt_metrics(mitigated_metrics)}
+
+Write a plain English explanation in 3-4 sentences for a technical audience."""
+
+    try:
+        explanation = _call_groq(EXPLANATION_SYSTEM, prompt, temperature=0.3)
+        logger.info("Groq explanation generated (%d chars)", len(explanation))
+        return explanation.strip()
+    except Exception as exc:
+        logger.warning("Groq explanation fallback failed: %s", exc)
+        return None

@@ -74,3 +74,9 @@ ENV/
 /uploads/
 /fastapi/workspaces/
 build_output.txt
+backend/uploads/
+*.pkl
+~*.docx
+scratch*.py
+test_*.py
+dataset.csv

@@ -100,12 +100,50 @@ export default function UploadPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || "Analysis failed.");
+        throw new Error(data.error || data.detail || "Analysis failed.");
       }
 
-      localStorage.setItem("trialAnalysis", JSON.stringify(data));
+      // Transform backend response into the shape the courtroom page expects
+      const biasMetrics: any[] = data.bias_metrics || [];
+
+      const getMetric = (name: string) => {
+        const m = biasMetrics.find((b: any) =>
+          b.metric_name?.toLowerCase().replace(/[\s_-]/g, "") === name.toLowerCase().replace(/[\s_-]/g, "")
+        );
+        return m ? m.metric_value : null;
+      };
+
+      // disparate_impact_ratio: higher=fairer (want >=0.8)
+      // demographic_parity_difference / equalized_odds_difference: lower=fairer (want <=0.10)
+      const disparateImpact = getMetric("disparateimpactratio") ?? getMetric("disparateimpact") ?? 1.0;
+      const demographicParity = getMetric("demographicparitydifference") ?? getMetric("demographicparity") ?? 0.0;
+      const equalOpportunity = getMetric("equalizedoddsdifference") ?? getMetric("equalopportunity") ?? 0.0;
+
+      // Normalise to 0-1 where 1=fair, 0=biased
+      const normDisparate = Math.min(Math.max(disparateImpact, 0), 1);
+      const normDemographic = Math.max(0, 1 - demographicParity);
+      const normEqual = Math.max(0, 1 - equalOpportunity);
+
+      const transformed = {
+        ...data,
+        rows: data.row_count ?? 0,
+        features: data.feature_count ?? 0,
+        model_accuracy: data.accuracy ?? 0,
+        fairness_metrics: {
+          demographicParity: normDemographic,
+          equalOpportunity: normEqual,
+          disparateImpact: normDisparate,
+        },
+        proxy_features: data.proxy_features ?? [],
+        shap_values: data.shap_values ?? [],
+        demographic_breakdown: data.demographic_breakdown ?? {},
+      };
+
+      localStorage.setItem("trialAnalysis", JSON.stringify(transformed));
       localStorage.setItem("trialDatasetName", csvFile.name.replace(/\.csv$/i, ""));
       if (data.session_id) localStorage.setItem("trialSessionId", data.session_id);
+      if (data.target_column) localStorage.setItem("trialTargetColumn", data.target_column);
+      if (data.sensitive_attributes) localStorage.setItem("trialSensitiveAttrs", JSON.stringify(data.sensitive_attributes));
       localStorage.removeItem("trialChatState");
 
       router.push("/trial/new");
@@ -122,7 +160,7 @@ export default function UploadPage() {
   return (
     <div className="relative min-h-screen text-white overflow-hidden selection:bg-gold/30 pb-32 font-sans">
       {/* Video Background */}
-      <div className="fixed inset-0 w-full h-full z-[-2]">
+      <div className="fixed inset-0 w-full h-full z-0">
         <video 
           autoPlay 
           loop 
@@ -135,8 +173,8 @@ export default function UploadPage() {
       </div>
 
       {/* Cinematic Overlay */}
-      <div className="fixed inset-0 bg-black/40 z-[-1]" />
-      <div className="fixed inset-0 bg-gradient-to-b from-black/10 via-black/50 to-black/90 z-[-1]" />
+      <div className="fixed inset-0 bg-black/40 z-10 pointer-events-none" />
+      <div className="fixed inset-0 bg-gradient-to-b from-black/10 via-black/50 to-black/90 z-10 pointer-events-none" />
 
       {/* Step Indicator (Glassmorphism) */}
       <div className="fixed top-16 left-0 w-full border-b border-white/10 bg-black/20 backdrop-blur-xl z-40">
@@ -147,7 +185,7 @@ export default function UploadPage() {
         </div>
       </div>
 
-      <main className="relative z-10 max-w-4xl mx-auto px-6 pt-40">
+      <main className="relative z-20 max-w-4xl mx-auto px-6 pt-40">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-12 text-center">
           <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-lg">Submit Evidence for Trial</h1>
           <p className="text-white/70 text-xl font-light max-w-2xl mx-auto">Upload your dataset, trained model, and optionally the training script for a complete adversarial bias audit.</p>

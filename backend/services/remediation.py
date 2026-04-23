@@ -139,6 +139,7 @@ Return ONLY the JSON object."""
         messages=[{"role": "user", "content": prompt}],
         max_tokens=1500,
         temperature=0.1,
+        force_local=True,
     )
     # Strip markdown fences if present
     if raw.strip().startswith("```"):
@@ -192,6 +193,7 @@ Apply the plan.  Return ONLY the JSON object."""
         messages=[{"role": "user", "content": prompt}],
         max_tokens=4000,
         temperature=0.15,
+        force_local=True,
     )
     # Strip markdown fences
     if raw.strip().startswith("```"):
@@ -382,6 +384,7 @@ def _reweigh(
     """
     Clone the model, compute per-sample weights based on the joint
     distribution of (group, label), and retrain.
+    Handles sklearn Pipeline objects by using the stepname__sample_weight syntax.
     """
     new_model = clone(model)
 
@@ -389,17 +392,47 @@ def _reweigh(
     combined = np.array([f"{s}_{l}" for s, l in zip(sensitive, y)])
     weights = compute_sample_weight(class_weight="balanced", y=combined)
 
+    X_fit = X.values if isinstance(X, pd.DataFrame) else X
+
+    # For sklearn Pipeline, sample_weight must be passed as step__sample_weight
+    fit_params: dict = {}
+    model_name = type(new_model).__name__
+    if model_name == "Pipeline" and hasattr(new_model, "steps"):
+        # Find the final estimator step name
+        last_step_name, last_estimator = new_model.steps[-1]
+        last_est_name = type(last_estimator).__name__
+
+        # Check if the final estimator supports sample_weight
+        import inspect
+        try:
+            sig = inspect.signature(last_estimator.fit)
+            if "sample_weight" in sig.parameters:
+                fit_params[f"{last_step_name}__sample_weight"] = weights
+                logger.info(
+                    "Pipeline reweighing: passing %s__sample_weight to step '%s' (%s)",
+                    last_step_name, last_step_name, last_est_name
+                )
+            else:
+                logger.warning(
+                    "Pipeline final step '%s' (%s) does not support sample_weight — training unweighted.",
+                    last_step_name, last_est_name
+                )
+        except Exception:
+            logger.warning("Could not inspect Pipeline step signature — training unweighted.")
+    else:
+        fit_params["sample_weight"] = weights
+
     try:
-        new_model.fit(X.values, y, sample_weight=weights)
-    except TypeError:
-        # Model doesn't support sample_weight — train without
+        new_model.fit(X_fit, y, **fit_params)
+    except (TypeError, ValueError) as exc:
         logger.warning(
-            "%s does not support sample_weight; training unweighted.",
-            type(model).__name__,
+            "%s sample_weight fit failed (%s) — retrying without weights.",
+            model_name, exc
         )
-        new_model.fit(X.values, y)
+        new_model.fit(X_fit, y)
 
     return new_model
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -526,102 +559,7 @@ STRATEGIES = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  LLM-Powered Remediation
-# ═══════════════════════════════════════════════════════════════════════════════
 
-def generate_llm_mitigation(
-    script_content: str,
-    strategy: str,
-    metrics: list[dict],
-    protected_attrs: list[str],
-    proxies: list[dict],
-) -> dict:
-    """
-    Call the LLM to analyze and modify the training script.
-    Returns {script_diff: str, explanation: dict}.
-    """
-    llm = get_llm_client()
-
-    # Format evidence for the prompt
-    metrics_summary = "\n".join([
-        f"- {m['metric_name']}: {m['metric_value']:.4f} (Threshold: {m['threshold']}, Passed: {m['passed']})"
-        for m in metrics
-    ])
-    
-    proxy_summary = "\n".join([
-        f"- {p['feature']} (correlates with {p['corr_with']}, r={p['correlation']:.4f})"
-        for p in proxies
-    ]) if proxies else "None detected."
-
-    user_prompt = f"""Please remediate the following training script.
-
-MITIGATION STRATEGY REQUESTED: {strategy}
-PROTECTED ATTRIBUTES: {", ".join(protected_attrs)}
-PROXY FEATURES:
-{proxy_summary}
-
-CURRENT FAIRNESS METRICS:
-{metrics_summary}
-
-ORIGINAL TRAINING SCRIPT:
-```python
-{script_content}
-```
-
-Analyze the code and apply the requested mitigation. Return the unified diff and the JSON explanation."""
-
-    logger.info("Calling LLM for code remediation (strategy: %s)...", strategy)
-    raw_response = llm.chat(
-        system=REMEDIATION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-        max_tokens=3000,
-        temperature=0.2
-    )
-
-    # Parse response
-    script_diff = ""
-    explanation = {}
-
-    # Extract diff
-    if "```diff" in raw_response:
-        script_diff = raw_response.split("```diff")[1].split("```")[0].strip()
-    elif "---" in raw_response and "+++" in raw_response:
-        # Try to find diff even if not in block
-        lines = raw_response.split("\n")
-        start = -1
-        for i, line in enumerate(lines):
-            if line.startswith("---") and i + 1 < len(lines) and lines[i+1].startswith("+++"):
-                start = i
-                break
-        if start != -1:
-            end = len(lines)
-            for i in range(start + 2, len(lines)):
-                if lines[i].startswith("```") or (lines[i].startswith("{") and i > start + 5):
-                    end = i
-                    break
-            script_diff = "\n".join(lines[start:end]).strip()
-
-    # Extract JSON
-    if "```json" in raw_response:
-        try:
-            explanation = json.loads(raw_response.split("```json")[1].split("```")[0].strip())
-        except:
-            pass
-    elif "{" in raw_response and "}" in raw_response:
-        try:
-            # Simple heuristic to find JSON block
-            start = raw_response.find("{")
-            end = raw_response.rfind("}") + 1
-            explanation = json.loads(raw_response[start:end])
-        except:
-            pass
-
-    return {
-        "script_diff": script_diff,
-        "explanation": explanation,
-        "raw_response": raw_response
-    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -764,12 +702,12 @@ def run_remediation(
         raise ValueError(f"Unknown strategy '{strategy}'. Choose from: {list(STRATEGIES.keys())}")
 
     # ── Prepare data ────────────────────────────────────────────────────────
-    X, y, feature_cols, raw_sensitive, encoders = prepare_dataset(df, target_column, sensitive_attrs)
+    X, y, feature_cols, raw_sensitive, encoders, X_raw = prepare_dataset(df, target_column, sensitive_attrs)
 
     if len(X) < 10:
         raise ValueError(f"Dataset has only {len(X)} rows after cleaning.")
 
-    X, feature_cols = match_features(model, X, feature_cols)
+    X, feature_cols = match_features(model, X, feature_cols, X_raw)
 
     primary_key = next(
         (k for k in raw_sensitive if k.lower() == sensitive_attrs[0].lower()), None,

@@ -3,20 +3,20 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { session_id } = body;
+    const { session_id, target_column, sensitive_attributes, strategy } = body;
 
-    if (!session_id) {
+    if (!session_id || !target_column || !sensitive_attributes) {
       return NextResponse.json(
-        { error: "Missing required field: session_id" },
+        { error: "Missing required fields: session_id, target_column, or sensitive_attributes" },
         { status: 400 }
       );
     }
 
     const fastApiUrl = process.env.FASTAPI_URL || "http://localhost:8000";
-    const response = await fetch(`${fastApiUrl}/mitigate-and-retrain`, {
+    const response = await fetch(`${fastApiUrl}/api/remediation/run/${session_id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id }),
+      body: JSON.stringify({ target_column, sensitive_attributes, strategy: strategy || "reweighing" }),
     });
 
     const rawText = await response.text();

@@ -101,7 +101,7 @@ Equal Opportunity: ${equalOpportunity}
 Disparate Impact: ${disparateImpact}
 
 CRITICAL RULES:
-- You MUST return a non-zero score for EVERY dimension. No score should ever be 0.
+- You MUST return a non-zero score for EVERY dimension. No score score should ever be 0.
 - Even when direct evidence is limited for a dimension, infer a reasonable score (0.20–0.80) based on the dataset context, the sensitive attribute, and the provided metrics.
 - For example: if the dataset is about criminal justice and the sensitive attribute is race, Racial should be high, but Geographic and Socioeconomic should also have meaningful scores because they are correlated proxies.
 - Intersectional bias should always be scored — it represents compounded effects across multiple dimensions.

@@ -45,6 +45,7 @@ from sklearn.metrics import accuracy_score
 
 from backend.services.bias_engine import (
     compute_fairness_metrics,
+    match_features,
     prepare_dataset,
 )
 from backend.services.ollama_client import is_ollama_available
@@ -108,7 +109,7 @@ def run_local_remediation(
     # ── Step 1: Prepare dataset ──────────────────────────────────────────────
     logger.info("[Step 1] Preparing dataset...")
 
-    X, y, feature_cols, raw_sensitive, _ = prepare_dataset(df, target_column, sensitive_attrs)
+    X, y, feature_cols, raw_sensitive, _, X_raw = prepare_dataset(df, target_column, sensitive_attrs)
 
     if not raw_sensitive:
         raise ValueError(f"No sensitive attributes found: {sensitive_attrs}")
@@ -117,19 +118,7 @@ def run_local_remediation(
     sensitive_values = raw_sensitive[primary_key]
 
     # ── Align features to model's expected input ─────────────────────────────
-    _fn = getattr(model, "feature_names_in_", None)
-    model_feature_names = list(_fn) if _fn is not None else []
-    if model_feature_names:
-        # Keep only the columns the original model was trained on
-        available = [c for c in model_feature_names if c in X.columns]
-        if len(available) == model.n_features_in_:
-            X = X[available]
-            logger.info("[Step 1] Aligned X to model features: %s", available)
-        else:
-            logger.warning(
-                "[Step 1] Could not fully align features: model expects %d, found %d matching",
-                model.n_features_in_, len(available)
-            )
+    X, feature_cols = match_features(model, X, feature_cols, X_raw)
 
     logger.info("[Step 1] Dataset ready: %d rows, %d features, sensitive=%s", len(df), X.shape[1], primary_key)
 
@@ -191,7 +180,7 @@ def run_local_remediation(
     logger.info("[Step 5] Applying %s patch...", strategy)
 
     patcher = PATCH_FUNCTIONS.get(strategy, PATCH_FUNCTIONS["reweighing"])
-    patch_result = patcher(original_script)
+    patch_result = patcher(original_script, sensitive_attr=sensitive_attrs[0] if sensitive_attrs else None)
 
     patched_script = patch_result["patched_script"]
     patch_applied = patch_result["patch_applied"]

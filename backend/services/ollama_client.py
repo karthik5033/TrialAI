@@ -12,10 +12,12 @@ import logging
 import requests
 from typing import Optional
 
+import os
+
 logger = logging.getLogger("courtroom.ollama")
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen2.5-coder"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:latest")
 
 
 def is_ollama_available() -> bool:
@@ -32,7 +34,7 @@ def call_ollama(
     model: str = DEFAULT_MODEL,
     system: Optional[str] = None,
     temperature: float = 0.3,
-    timeout: int = 120,
+    timeout: int = 45,
 ) -> str:
     """
     Call the local Ollama API and return the generated text.

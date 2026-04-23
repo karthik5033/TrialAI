@@ -33,9 +33,12 @@ load_dotenv()
 
 logger = logging.getLogger("courtroom.db")
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+default_db_path = os.path.join(BASE_DIR, "courtroom.db").replace("\\", "/")
+
 DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
-    "sqlite+aiosqlite:///./courtroom.db",
+    f"sqlite+aiosqlite:///{default_db_path}",
 )
 
 # asyncpg does not accept "postgresql://" — it must be "postgresql+asyncpg://"

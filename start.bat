@@ -11,7 +11,7 @@ alembic upgrade head
 cd backend
 
 echo 2. Starting Backend Server...
-start "AI Courtroom - Backend" cmd /k "call venv\Scripts\activate.bat & uvicorn main:app --reload --port 8000"
+start "AI Courtroom - Backend" cmd /k "call venv\Scripts\activate.bat & cd .. & uvicorn backend.main:app --reload --port 8000"
 
 cd ..
 

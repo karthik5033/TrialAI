@@ -21,6 +21,9 @@ class LLMClient:
         self.client = None
         self.model = None
         
+        # 0. Check Ollama (Local) first ONLY if it's the only one or strictly forced globally
+        # We will instead use force_local in chat() to route to Ollama selectively.
+
         # 1. Check Anthropic
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         if anthropic_key and anthropic_key != "your_key_here":
@@ -61,11 +64,13 @@ class LLMClient:
 
         logger.error("No LLM API keys found in environment!")
 
-    def chat(self, system: str, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
-        if not self.provider:
+    def chat(self, system: str, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7, force_local: bool = False) -> str:
+        if not self.provider and not force_local:
             raise RuntimeError("LLM Client not initialized. Please set an API key in backend/.env")
 
-        if self.provider == "anthropic":
+        provider = "ollama" if force_local else self.provider
+        
+        if provider == "anthropic":
             resp = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -75,10 +80,13 @@ class LLMClient:
             )
             return resp.content[0].text
 
-        # OpenAI-Compatible providers (OpenRouter, NVIDIA, Groq)
+        # OpenAI-Compatible providers (OpenRouter, NVIDIA, Groq, Ollama)
         else:
+            api_key = "dummy" if provider == "ollama" else self.api_key
+            model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:latest") if provider == "ollama" else self.model
+            
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
             
@@ -89,26 +97,29 @@ class LLMClient:
             combined_messages.extend(messages)
             
             payload = {
-                "model": self.model,
+                "model": model,
                 "messages": combined_messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature
             }
             
             url = ""
-            if self.provider == "openrouter":
+            if provider == "openrouter":
                 url = "https://openrouter.ai/api/v1/chat/completions"
                 headers["HTTP-Referer"] = "https://github.com/karthik5033/TrialAI"
                 headers["X-Title"] = "AI Courtroom v2.0"
-            elif self.provider == "nvidia":
+            elif provider == "nvidia":
                 url = self.base_url + "/chat/completions"
-            elif self.provider == "groq":
+            elif provider == "groq":
                 url = self.base_url + "/chat/completions"
+            elif provider == "ollama":
+                url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1") + "/chat/completions"
 
-            with httpx.Client(timeout=60.0) as client:
+            timeout = 120.0 if provider == "ollama" else 60.0
+            with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 if resp.status_code != 200:
-                    logger.error(f"LLM API Error ({self.provider}): {resp.text}")
+                    logger.error(f"LLM API Error ({provider}): {resp.text}")
                     raise RuntimeError(f"LLM API Error: {resp.status_code}")
                 
                 data = resp.json()

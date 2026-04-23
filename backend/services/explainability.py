@@ -37,7 +37,7 @@ def get_single_prediction_shap(
     Returns the base value, prediction, and feature contributions.
     """
     import shap
-    X, _, feature_cols, _, _ = prepare_dataset(df, target_column, sensitive_attrs)
+    X, _, feature_cols, _, _, _X_raw = prepare_dataset(df, target_column, sensitive_attrs)
     X, feature_cols = match_features(model, X, feature_cols)
 
     if row_index < 0 or row_index >= len(X):
@@ -134,7 +134,7 @@ def generate_counterfactuals(
     from dice_ml.utils import helpers
 
     # We need the full dataframe including target for DiCE Data object
-    X, y, feature_cols, raw_sensitive, _ = prepare_dataset(df, target_column, sensitive_attrs)
+    X, y, feature_cols, raw_sensitive, _, X_raw = prepare_dataset(df, target_column, sensitive_attrs)
     
     # Reconstruct a clean dataframe for DiCE
     dice_df = X.copy()

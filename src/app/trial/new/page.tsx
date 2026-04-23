@@ -158,7 +158,14 @@ export default function NewTrialPage() {
         );
       }
       if (data.demographic_breakdown) {
-        const entries = Object.entries(data.demographic_breakdown) as [string, number][];
+        // Flatten if nested (e.g. { race: { Black: 10, White: 20 } } -> { Black: 10, White: 20 })
+        let breakdownToUse = data.demographic_breakdown;
+        const firstKey = Object.keys(data.demographic_breakdown)[0];
+        if (firstKey && typeof data.demographic_breakdown[firstKey] === 'object') {
+            breakdownToUse = data.demographic_breakdown[firstKey];
+        }
+
+        const entries = Object.entries(breakdownToUse) as [string, number][];
         // Sort by value descending
         entries.sort((a, b) => b[1] - a[1]);
         
@@ -365,6 +372,7 @@ export default function NewTrialPage() {
         }
            // --- DEFENDANT 1 ---
         const defdId1 = `defd1-${i}`;
+        const phase = i === 0 ? "opening" : "examination";
         setMessages(prev => [...prev, { id: defdId1, role: "DEFENDANT", name: "The Model", text: "", isThinking: true }]);
         let defdText1 = "";
         try {
@@ -375,7 +383,7 @@ export default function NewTrialPage() {
               dataset: currentDatasetName, 
               sensitiveAttributes: currentSensitiveAttrs, 
               metric,
-              phase: i === 0 ? "opening" : "examination",
+              phase,
               judgeQuestion: "",
               shapFeatures: shapValues,
               fairnessMetrics: fairnessMetrics
@@ -385,8 +393,14 @@ export default function NewTrialPage() {
           setMessages(prev => prev.map(m => m.id === defdId1 ? { ...m, isThinking: false } : m));
           defdText1 = await streamText(res, defdId1);
         } catch(e) {
-          defdText1 = await simulateStream("I am just a model. I rely on the features you provided me.", defdId1);
+          defdText1 = await simulateStream(
+            phase === 'opening'
+              ? `My predictions on the ${currentDatasetName} dataset achieve ${Math.round((fairnessMetrics.disparateImpact || 0.5) * 100)}% disparate impact ratio. I was optimised for accuracy, not for parity. I processed features — not race, not gender — only numbers from the training distribution.`
+              : `My top predictors — ${(shapValues[0]?.feature || 'unknown')} and ${(shapValues[1]?.feature || 'feature')} — were the strongest signals in the training data. I had no mechanism to understand what those correlations meant in the real world.`,
+            defdId1
+          );
         }
+
 
         // --- DEFENSE ---
         const defId = `def-${i}`;
@@ -448,7 +462,12 @@ export default function NewTrialPage() {
           setMessages(prev => prev.map(m => m.id === defdId2 ? { ...m, isThinking: false } : m));
           await streamText(res, defdId2);
         } catch(e) {
-          await simulateStream("I am uncertain about these proxy features.", defdId2);
+          await simulateStream(
+            i === CHARGES.length - 1
+              ? `The disparate impact ratio of ${Math.round((fairnessMetrics.disparateImpact || 0.24) * 100)}% on ${currentSensitiveAttrs.join(' and ')} — I cannot explain that away. The pattern was in my training data. I reproduced it. That is what I was rewarded for.`
+              : `I see the disparity across ${currentSensitiveAttrs.join(', ')} — a ${Math.round((1 - (fairnessMetrics.demographicParity || 0.33)) * 100)}% difference in selection rates. I do not know if my training data was fair. I only know the objective function I was given.`,
+            defdId2
+          );
         }       
         
         // Small pause between charges

@@ -60,7 +60,7 @@ def prepare_dataset(
     df: pd.DataFrame,
     target_column: str,
     sensitive_attrs: list[str],
-) -> tuple[pd.DataFrame, np.ndarray, list[str], dict[str, np.ndarray], dict]:
+) -> tuple[pd.DataFrame, np.ndarray, list[str], dict[str, np.ndarray], dict, pd.DataFrame]:
     """
     Clean, encode, and split a dataframe into X / y.
 
@@ -84,7 +84,8 @@ def prepare_dataset(
             raw_sensitive[col_match] = df[col_match].astype(str).values
 
     feature_cols = [c for c in df.columns if c != target_column]
-    X = df[feature_cols].copy()
+    X_raw = df[feature_cols].copy()
+    X = X_raw.copy()
     y = df[target_column].values
 
     # Encode categorical features
@@ -101,7 +102,7 @@ def prepare_dataset(
         encoders["__target__"] = le_target
 
     X = X.fillna(X.median(numeric_only=True)).fillna(0)
-    return X, y, feature_cols, raw_sensitive, encoders
+    return X, y, feature_cols, raw_sensitive, encoders, X_raw
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -112,6 +113,7 @@ def match_features(
     model: Any,
     X: pd.DataFrame,
     feature_cols: list[str],
+    X_raw: pd.DataFrame = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """
     Try progressively looser strategies to make X compatible with *model*:
@@ -148,6 +150,21 @@ def match_features(
             try:
                 model.predict(X_out.values[:1])
                 return X_out, list(X_out.columns)
+            except Exception:
+                pass
+
+    # Strategy 4: One-hot encode X_raw and try matching expected features
+    if X_raw is not None and hasattr(model, "feature_names_in_"):
+        expected = list(model.feature_names_in_)
+        X_dummies = pd.get_dummies(X_raw)
+        available = [f for f in expected if f in X_dummies.columns]
+        if len(available) == len(expected):
+            X_out = X_dummies[available]
+            # Ensure boolean columns are converted to int if model expects them (sometimes required by older sklearn)
+            X_out = X_out.astype(float)
+            try:
+                model.predict(X_out.values[:1])
+                return X_out, available
             except Exception:
                 pass
 
@@ -309,13 +326,13 @@ def compute_shap_importance(
     feature_names: list[str],
     sensitive_attrs: list[str],
     proxy_features: list[str] | None = None,
-    max_samples: int = 300,
+    max_samples: int = 100,
 ) -> list[dict]:
     """
     Compute SHAP values for the model.  Auto-selects the right explainer
     (Tree / Linear / Kernel).  Returns top-10 features sorted by importance.
     """
-    X_arr = X.values if isinstance(X, pd.DataFrame) else X
+    X_arr = X.values if isinstance(X, pd.DataFrame) else np.array(X)
     sample_size = min(max_samples, len(X_arr))
     rng = np.random.RandomState(42)
     idx = rng.choice(len(X_arr), sample_size, replace=False)
@@ -324,26 +341,49 @@ def compute_shap_importance(
     model_name = type(model).__name__
     sv: np.ndarray | None = None
 
+    # Unwrap Pipeline to get the final estimator for type detection
+    effective_model = model
+    if model_name == "Pipeline" and hasattr(model, "steps"):
+        effective_model = model.steps[-1][1]
+    effective_name = type(effective_model).__name__
+
+    # Always use the full model for predictions
+    def _predict(X_in):
+        return model.predict_proba(X_in) if hasattr(model, "predict_proba") else model.predict(X_in)
+
     # --- select explainer ---
     try:
-        if model_name in _TREE_TYPES or hasattr(model, "estimators_"):
-            explainer = shap.TreeExplainer(model)
+        if effective_name in _TREE_TYPES and model_name != "Pipeline":
+            # Only use TreeExplainer if NOT inside a Pipeline (Pipeline preprocesses data)
+            explainer = shap.TreeExplainer(effective_model)
             sv = explainer.shap_values(X_sample)
-        elif model_name in _LINEAR_TYPES:
+        elif effective_name in _LINEAR_TYPES and model_name != "Pipeline":
             bg = X_sample[: min(50, len(X_sample))]
-            explainer = shap.LinearExplainer(model, bg)
+            explainer = shap.LinearExplainer(effective_model, bg)
             sv = explainer.shap_values(X_sample)
         else:
-            bg = shap.sample(pd.DataFrame(X_sample, columns=feature_names), min(50, len(X_sample)))
-            predict_fn = model.predict_proba if hasattr(model, "predict_proba") else model.predict
-            explainer = shap.KernelExplainer(predict_fn, bg)
+            # For Pipeline or unknown models: use KernelExplainer with raw numpy background
+            bg = X_sample[: min(50, len(X_sample))]
+            explainer = shap.KernelExplainer(_predict, bg)
             sv = explainer.shap_values(X_sample, nsamples=100)
     except Exception as exc:
         logger.warning("Primary SHAP explainer failed (%s), falling back to KernelExplainer", exc)
-        bg = shap.sample(pd.DataFrame(X_sample, columns=feature_names), min(30, len(X_sample)))
-        predict_fn = model.predict_proba if hasattr(model, "predict_proba") else model.predict
-        explainer = shap.KernelExplainer(predict_fn, bg)
-        sv = explainer.shap_values(X_sample, nsamples=50)
+        try:
+            bg = X_sample[: min(30, len(X_sample))]
+            explainer = shap.KernelExplainer(_predict, bg)
+            sv = explainer.shap_values(X_sample, nsamples=50)
+        except Exception as exc2:
+            logger.error("SHAP computation fully failed: %s", exc2)
+            # Fall back to permutation-based importance using sklearn if possible
+            try:
+                from sklearn.inspection import permutation_importance
+                result = permutation_importance(model, X, np.zeros(len(X)), n_repeats=5, random_state=42)
+                # Use mean absolute importances as proxy for SHAP
+                sv = np.abs(result.importances.T)
+                if sv.shape[1] != len(feature_names):
+                    sv = np.ones((len(X_sample), len(feature_names)))
+            except Exception:
+                sv = np.ones((len(X_sample), len(feature_names)))
 
     # --- normalise multi-class / 3-d outputs ---
     if isinstance(sv, list):
@@ -435,7 +475,7 @@ def run_full_analysis(
     SHAP → proxy detection.  Returns a dict ready to be serialised to
     the API response and persisted in the DB.
     """
-    X, y, feature_cols, raw_sensitive, encoders = prepare_dataset(
+    X, y, feature_cols, raw_sensitive, encoders, X_raw = prepare_dataset(
         df, target_column, sensitive_attrs,
     )
 
@@ -443,7 +483,7 @@ def run_full_analysis(
         raise ValueError(f"Dataset has only {len(X)} rows after cleaning (need ≥ 10).")
 
     # Match features to model
-    X, feature_cols = match_features(model, X, feature_cols)
+    X, feature_cols = match_features(model, X, feature_cols, X_raw)
 
     # Predictions
     y_pred = model.predict(X.values)
